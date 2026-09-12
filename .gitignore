@@ -1,0 +1,14 @@
+# Deps + build output (cài lại bằng npm install / build trong Docker)
+**/node_modules/
+**/dist/
+**/.next/
+**/*.log
+*.tsbuildinfo
+# Dữ liệu chạy (không commit chunk video, playlist)
+storage/ramdisk/
+storage/captures/
+storage/exports/
+# Secret thật
+.env.prod
+# OS / editor
+.DS_Store

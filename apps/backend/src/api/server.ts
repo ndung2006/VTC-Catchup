@@ -1,0 +1,552 @@
+//=============================================================================
+ // server.ts — HTTP API Phase 2a (node:http thuần).
+ // Public (không cần login): /health, /api/auth/login, forgot, reset, logout.
+ // Còn lại dưới /api/*: bắt buộc JWT trong HttpOnly Cookie (verifyAuth).
+ // 401 khi thiếu/sai/hết hạn token — chặn trước khi spawn hay chạm đĩa.
+ // Endpoints auth: xem docs/07-AUTH.md.
+ //=============================================================================
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { generateConfText, writeConfFile, DEFAULT_CONF_DIR, ConfigError } from '../core/ConfigGenerator.js';
+import { ProcessManager } from '../core/ProcessManager.js';
+import { Store } from './store.js';
+import { snapshot } from './system.js';
+import {
+  JWT_COOKIE,
+  RESET_TTL_MS,
+  checkPassword,
+  hashPassword,
+  jwtClearCookie,
+  jwtSetCookie,
+  newResetToken,
+  parseCookies,
+  signToken,
+  verifyToken,
+} from './auth.js';
+import { DEFAULT_RETENTION_DAYS, runGarbageCollector } from '../jobs/garbageCollector.js';
+import { TelegramNotifier, processAlertText } from '../jobs/notify.js';
+import { checkHlsHealth } from '../jobs/healthcheck.js';
+import { Exporter, ExportError } from '../exporter/exporter.js';
+import type { SourceConfig } from '../core/types.js';
+
+export interface ApiOptions {
+  port?: number;
+  confDir?: string;
+  captureDir?: string;
+  exportsDir?: string;
+  liveDir?: string;
+  tspBin?: string;
+  /** Secret ký JWT (Prod bắt buộc VTC_JWT_SECRET). */
+  jwtSecret?: string;
+  /** Ms chờ auto-restart sau crash (mặc định 5000, test truyền nhỏ). */
+  restartDelayMs?: number;
+  /** Admin seed lúc boot (dev). */
+  adminUser?: string;
+  adminPass?: string;
+  adminEmail?: string;
+}
+
+/** Message chung cho login sai (không lộ user nào tồn tại). */
+const LOGIN_FAIL = 'sai tên đăng nhập hoặc mật khẩu';
+/** Message chung cho forgot (chống enumerate email). */
+const FORGOT_MSG = 'Nếu email hợp lệ, hệ thống đã gửi một đường link khôi phục. Vui lòng kiểm tra hộp thư.';
+
+const JSON_CT = 'application/json; charset=utf-8';
+
+function send(res: ServerResponse, code: number, body: unknown): void {
+  const txt = JSON.stringify(body);
+  res.writeHead(code, { 'content-type': JSON_CT, 'content-length': Buffer.byteLength(txt) });
+  res.end(txt);
+}
+
+function readJson(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    req.on('data', (c: Buffer) => {
+      buf += c.toString('utf8');
+      if (buf.length > 1_000_000) reject(new Error('body quá lớn'));
+    });
+    req.on('end', () => {
+      if (buf === '') return resolve({});
+      try {
+        resolve(JSON.parse(buf) as unknown);
+      } catch {
+        reject(new Error('JSON không hợp lệ'));
+      }
+    });
+  });
+}
+
+function checkSourceBody(b: unknown): SourceConfig {
+  const o = b as Partial<SourceConfig>;
+  if (typeof o.id !== 'string' || o.id === '') throw new Error('thiếu id');
+  if (typeof o.input !== 'string' || o.input === '') throw new Error('thiếu input');
+  if (!Array.isArray(o.channels)) throw new Error('thiếu channels[]');
+  if (typeof o.recordAll !== 'boolean') throw new Error('thiếu recordAll (boolean)');
+  return o as SourceConfig;
+}
+
+/** ISO string hoặc epoch ms → epoch ms (NaN nếu không parse được). */
+function toMs(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? NaN : t;
+  }
+  return NaN;
+}
+
+/**
+ * verifyAuth: đọc JWT từ HttpOnly Cookie, trả username hoặc null.
+ * Gắn trước mọi API nghiệp vụ — chặn spawn/chạm đĩa khi 401.
+ */function makeRequireAuth(jwtSecret: string) {
+  return (req: IncomingMessage): string | null => {
+    const token = parseCookies(req.headers.cookie)[JWT_COOKIE];
+    if (token === undefined) return null;
+    try {
+      return verifyToken(token, jwtSecret).sub;
+    } catch {
+      return null; // sai chữ ký / hết hạn / sai format
+    }
+  };
+}
+
+export function createApi(opts: ApiOptions = {}): {
+  listen: (port?: number) => Promise<{ port: number; close: () => Promise<void> }>;
+} {
+  const store = new Store();
+  const pm = opts.tspBin === undefined ? new ProcessManager() : new ProcessManager({ tspBin: opts.tspBin });
+  const confDir = opts.confDir ?? DEFAULT_CONF_DIR;
+  const captureDir = opts.captureDir ?? process.env['VTC_CAPTURE_DIR'] ?? 'storage/captures';
+  const exportsDir = opts.exportsDir ?? process.env['VTC_EXPORTS_DIR'] ?? 'storage/exports';
+  const liveDir = opts.liveDir ?? process.env['VTC_LIVE_DIR'] ?? 'storage/ramdisk';
+  const notifier = new TelegramNotifier(); // đọc VTC_TELEGRAM_* từ env, thiếu thì log
+  const exporter =
+    opts.tspBin === undefined
+      ? new Exporter({ captureDir, exportsDir })
+      : new Exporter({ captureDir, exportsDir, tspBin: opts.tspBin });
+  const jwtSecret = opts.jwtSecret ?? process.env['VTC_JWT_SECRET'] ?? 'dev-only-insecure-secret';
+  if (process.env['VTC_JWT_SECRET'] === undefined && opts.jwtSecret === undefined) {
+    // eslint-disable-next-line no-console
+    console.warn('[vtc-api][WARN] dùng JWT secret mặc định — đặt VTC_JWT_SECRET ở Prod!');
+  }
+
+  // Đồng bộ trạng thái process → store (UI đọc 1 chỗ).
+  // CC-error → Telegram (cooldown 5'/source trong notifier, PRD §15).
+  // Crash không chủ đích → Telegram (Trigger 1) + auto-restart sau restartDelayMs
+  // với conf mới nhất (PRD §3.2). Stop tay/xóa record thì không restart.
+  const restartDelayMs = opts.restartDelayMs ?? 5000;
+  const noRestart = new Set<string>(); // id đang stop tay
+  const pendingRestarts = new Map<string, NodeJS.Timeout>();
+  const clearPending = (id: string): void => {
+    const t = pendingRestarts.get(id);
+    if (t !== undefined) {
+      clearTimeout(t);
+      pendingRestarts.delete(id);
+    }
+  };
+  pm.setHandlers({
+    onStatus: (id, s) => store.setStatus(id, s, pm.getPid(id)),
+    onCcError: (ev) => {
+      void notifier.alert(
+        `cc:${ev.sourceId}`,
+        processAlertText(ev.sourceId, `CC error pid=${ev.pid} (expected ${ev.expected}, got ${ev.got})`, 'Tín hiệu có dấu hiệu packet-loss.'),
+      );
+    },
+    onExit: (id, code, signal) => {
+      if (noRestart.has(id)) return; // stop tay — không restart
+      const rec = store.getSource(id);
+      if (rec === undefined) return; // đã bị xóa — không restart
+      const why = signal !== null ? `signal ${signal}` : `mã ${String(code)}`;
+      void notifier.alert(
+        `exit:${id}`,
+        processAlertText(id, `Tiến trình tsp dừng đột ngột (${why})`, 'Đang tiến hành Auto-restart...'),
+      );
+      clearPending(id);
+      const t = setTimeout(() => {
+        pendingRestarts.delete(id);
+        const r = store.getSource(id);
+        if (r === undefined || r.status !== 'ERROR') return;
+        try {
+          const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
+          const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
+          store.setStatus(id, 'RUNNING', pid);
+        } catch {
+          // tsp missing/conf lỗi: giữ ERROR, chờ operator sửa + start tay.
+        }
+      }, restartDelayMs);
+      t.unref?.();
+      pendingRestarts.set(id, t);
+    },
+  });
+  const requireAuth = makeRequireAuth(jwtSecret);
+
+  // Seed admin lúc boot (in-memory; Phase 2b chuyển vào DB + migration).
+  const adminUser = opts.adminUser ?? process.env['VTC_ADMIN_USER'] ?? 'admin';
+  const adminEmail = opts.adminEmail ?? process.env['VTC_ADMIN_EMAIL'] ?? 'admin@vtc.local';
+  const adminPass = opts.adminPass ?? process.env['VTC_ADMIN_PASS'] ?? 'admin12345';
+  let seeded = false;
+  async function seedAdmin(): Promise<void> {
+    if (seeded) return;
+    seeded = true;
+    store.seedUser({
+      username: adminUser,
+      email: adminEmail,
+      passwordHash: await hashPassword(adminPass),
+      role: 'admin',
+    });
+    if (process.env['VTC_ADMIN_PASS'] === undefined && opts.adminPass === undefined) {
+      // eslint-disable-next-line no-console
+      console.warn('[vtc-api][WARN] dùng mật khẩu admin mặc định — đặt VTC_ADMIN_PASS ở Prod!');
+    }
+  }
+
+  const server = createServer((req, res) => {
+    void handle(req, res).catch((e: unknown) => {
+      const msg = e instanceof Error ? e.message : 'lỗi không rõ';
+      const code = /không tồn tại/.test(msg) ? 404 : /đang RUNNING|vô nghĩa|thiếu|không hợp lệ/.test(msg) ? 400 : 500;
+      send(res, code, { error: msg });
+    });
+  });
+
+  async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://x');
+    const m = req.method ?? 'GET';
+    const seg = url.pathname.split('/').filter(Boolean);
+
+    if (m === 'GET' && url.pathname === '/health') {
+      send(res, 200, { ok: true });
+      return;
+    }
+
+    //-- Auth routes (public) -------------------------------------------------
+    if (seg[0] === 'api' && seg[1] === 'auth') {
+      // POST /api/auth/login {username, password}
+      if (m === 'POST' && seg[2] === 'login') {
+        const b = (await readJson(req)) as { username?: unknown; password?: unknown };
+        const user =
+          typeof b.username === 'string' ? store.findUser(b.username) : undefined;
+        const ok =
+          user !== undefined &&
+          typeof b.password === 'string' &&
+          (await checkPassword(b.password, user.passwordHash));
+        if (!ok) return send(res, 401, { error: LOGIN_FAIL });
+        res.setHeader('set-cookie', jwtSetCookie(signToken(user, jwtSecret)));
+        send(res, 200, { ok: true, user: { username: user.username, role: user.role } });
+        return;
+      }
+      // POST /api/auth/logout
+      if (m === 'POST' && seg[2] === 'logout') {
+        res.setHeader('set-cookie', jwtClearCookie());
+        send(res, 200, { ok: true });
+        return;
+      }
+      // POST /api/auth/change-password (cần login)
+      if (m === 'POST' && seg[2] === 'change-password') {
+        const me = requireAuth(req);
+        if (me === null) return send(res, 401, { error: 'unauthorized' });
+        const b = (await readJson(req)) as {
+          currentPassword?: unknown;
+          newPassword?: unknown;
+          confirmPassword?: unknown;
+        };
+        if (typeof b.newPassword !== 'string' || b.newPassword.length < 8) {
+          return send(res, 400, { error: 'mật khẩu mới tối thiểu 8 ký tự' });
+        }
+        if (b.newPassword !== b.confirmPassword) {
+          return send(res, 400, { error: 'xác nhận mật khẩu không khớp' });
+        }
+        const user = store.findUser(me);
+        if (
+          user === undefined ||
+          typeof b.currentPassword !== 'string' ||
+          !(await checkPassword(b.currentPassword, user.passwordHash))
+        ) {
+          return send(res, 401, { error: 'mật khẩu hiện tại không đúng' });
+        }
+        store.setPasswordHash(me, await hashPassword(b.newPassword));
+        send(res, 200, { ok: true });
+        return;
+      }
+      // POST /api/auth/forgot-password {email} — luôn message chung
+      if (m === 'POST' && seg[2] === 'forgot-password') {
+        const b = (await readJson(req)) as { email?: unknown };
+        const user =
+          typeof b.email === 'string' ? store.findUserByEmail(b.email) : undefined;
+        if (user !== undefined) {
+          const token = newResetToken();
+          store.setResetToken(user.username, token, Date.now() + RESET_TTL_MS);
+          // Chưa có SMTP (Phase sau dùng Nodemailer) — in link ra log để dev/test.
+          // eslint-disable-next-line no-console
+          console.log(`[vtc-api] reset link cho ${user.email}: /reset-password?token=${token}`);
+        }
+        send(res, 200, { message: FORGOT_MSG });
+        return;
+      }
+      // POST /api/auth/reset-password {token, newPassword}
+      if (m === 'POST' && seg[2] === 'reset-password') {
+        const b = (await readJson(req)) as { token?: unknown; newPassword?: unknown };
+        if (typeof b.newPassword !== 'string' || b.newPassword.length < 8) {
+          return send(res, 400, { error: 'mật khẩu mới tối thiểu 8 ký tự' });
+        }
+        const user = typeof b.token === 'string' ? store.findUserByResetToken(b.token) : undefined;
+        if (user === undefined) {
+          return send(res, 400, { error: 'link khôi phục không hợp lệ hoặc đã hết hạn' });
+        }
+        store.setPasswordHash(user.username, await hashPassword(b.newPassword));
+        send(res, 200, { ok: true });
+        return;
+      }
+      return send(res, 404, { error: 'không tìm thấy route' });
+    }
+
+    //-- Gate: mọi /api/* còn lại bắt buộc JWT hợp lệ (verifyAuth) -------------
+    if (seg[0] === 'api') {
+      if (requireAuth(req) === null) return send(res, 401, { error: 'unauthorized' });
+    }
+
+    // SSE monitor: GET /api/system/stream (đã qua gate ở trên)
+    if (m === 'GET' && url.pathname === '/api/system/stream') {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      let alive = true;
+      req.on('close', () => {
+        alive = false;
+        clearInterval(timer);
+      });
+      const push = async (): Promise<void> => {
+        if (!alive) return;
+        const s = await snapshot(captureDir);
+        res.write(
+          `data: ${JSON.stringify({ cpu: s.cpu, ram_used: s.ramUsedMb, ram_percent: s.ramPercent, disk_percent: s.diskPercent, network: { tx: s.network.txBytes, rx: s.network.rxBytes } })}\n\n`,
+        );
+      };
+      const timer = setInterval(() => void push(), 2000);
+      await push();
+      return;
+    }
+
+    //-- Admin ops (đã qua gate) --------------------------------------------------
+    // POST /api/admin/gc {dryRun?} — chạy GC ngay (cron giờ gọi endpoint này
+    // hoặc bật VTC_GC_ENABLE=1 để server tự chạy mỗi giờ).
+    if (seg[0] === 'api' && seg[1] === 'admin' && m === 'POST' && seg[2] === 'gc') {
+      const b = (await readJson(req)) as { dryRun?: unknown };
+      const r = await runGarbageCollector({
+        captureDir,
+        exportsDir,
+        dryRun: b.dryRun === true,
+        getRetentionDays: (id) => store.getSource(id)?.retentionDays ?? DEFAULT_RETENTION_DAYS,
+      });
+      if (r.diskAfter !== null && r.diskAfter > 90) {
+        await notifier.alert(
+          'disk',
+          processAlertText('DISK', `phân vùng captures đã ${r.diskAfter}% (ngưỡng 90%)`, 'Cần can thiệp dọn rác gấp.'),
+        );
+      }
+      send(res, 200, r);
+      return;
+    }
+    // GET /api/admin/hls-health — playlist kênh nào stale
+    if (seg[0] === 'api' && seg[1] === 'admin' && m === 'GET' && seg[2] === 'hls-health') {
+      send(res, 200, await checkHlsHealth(liveDir));
+      return;
+    }
+
+    //-- Exports (đã qua gate) --------------------------------------------------
+    // POST /api/exports {channelName, sourceId, serviceId, inPoint, outPoint}
+    // ISO string hoặc epoch ms. Trả 200 + job ngay (async, PRD §6.C).
+    if (seg[0] === 'api' && seg[1] === 'exports' && seg.length === 2) {
+      if (m === 'GET') {
+        send(res, 200, exporter.list());
+        return;
+      }
+      if (m === 'POST') {
+        const b = (await readJson(req)) as {
+          channelName?: unknown;
+          sourceId?: unknown;
+          serviceId?: unknown;
+          inPoint?: unknown;
+          outPoint?: unknown;
+        };
+        try {
+          const job = await exporter.submit({
+            channelName: typeof b.channelName === 'string' ? b.channelName : '',
+            sourceId: typeof b.sourceId === 'string' ? b.sourceId : '',
+            serviceId: typeof b.serviceId === 'number' ? b.serviceId : NaN,
+            inPoint: toMs(b.inPoint),
+            outPoint: toMs(b.outPoint),
+            createdBy: requireAuth(req) ?? 'unknown',
+          });
+          send(res, 200, job);
+        } catch (e) {
+          if (e instanceof ExportError) return send(res, 400, { error: e.message });
+          throw e;
+        }
+        return;
+      }
+    }
+    if (seg[0] === 'api' && seg[1] === 'exports' && seg[2] !== undefined) {
+      const expId = decodeURIComponent(seg[2]);
+      // GET /api/exports/:id/download — stream file (không đọc hết vào RAM).
+      if (m === 'GET' && seg[3] === 'download') {
+        const job = exporter.get(expId);
+        if (job === undefined) return send(res, 404, { error: `Tác vụ ${expId} không tồn tại` });
+        if (job.status !== 'SUCCESS') {
+          return send(res, 409, { error: `Tác vụ đang ${job.status} — chưa thể tải` });
+        }
+        let st: { size: number; isFile: () => boolean };
+        try {
+          const { stat } = await import('node:fs/promises');
+          st = await stat(job.filePath);
+        } catch {
+          return send(res, 404, { error: 'File vật lý không còn (có thể đã bị GC dọn)' });
+        }
+        if (!st.isFile()) return send(res, 404, { error: 'File vật lý không còn' });
+        const { createReadStream } = await import('node:fs');
+        res.writeHead(200, {
+          'content-type': 'video/mp2t',
+          'content-length': st.size,
+          'content-disposition': `attachment; filename="${job.fileName}"`,
+        });
+        createReadStream(job.filePath).on('error', () => res.destroy()).pipe(res);
+        return;
+      }
+      if (m === 'GET' && seg.length === 3) {
+        const job = exporter.get(expId);
+        if (job === undefined) return send(res, 404, { error: `Tác vụ ${expId} không tồn tại` });
+        send(res, 200, job);
+        return;
+      }
+      // DELETE /api/exports/:id — xóa file vật lý trước, record sau.
+      if (m === 'DELETE' && seg.length === 3) {
+        try {
+          await exporter.remove(expId);
+        } catch (e) {
+          if (e instanceof ExportError) return send(res, 400, { error: e.message });
+          throw e;
+        }
+        send(res, 200, { ok: true });
+        return;
+      }
+    }
+
+    if (seg[0] === 'api' && seg[1] === 'sources') {
+      const id = seg[2] === undefined ? undefined : decodeURIComponent(seg[2]);
+
+      if (m === 'GET' && id === undefined) {
+        send(res, 200, store.listSources());
+        return;
+      }
+      if (m === 'POST' && id === undefined) {
+        const body = checkSourceBody(await readJson(req));
+        try {
+          generateConfText(body); // validate conf sinh được trước khi lưu (400 thay vì 500 lúc start)
+        } catch (e) {
+          if (e instanceof ConfigError) return send(res, 400, { error: e.message });
+          throw e;
+        }
+        const rec = store.createSource(body);
+        send(res, 201, rec);
+        return;
+      }
+      if (id !== undefined && seg.length === 3) {
+        if (m === 'GET') {
+          const r = store.getSource(id);
+          if (r === undefined) return send(res, 404, { error: `Source ${id} không tồn tại` });
+          return send(res, 200, r);
+        }
+        if (m === 'PUT') {
+          const cur = store.getSource(id);
+          if (cur === undefined) return send(res, 404, { error: `Source ${id} không tồn tại` });
+          const patch = (await readJson(req)) as Partial<SourceConfig>;
+          try {
+            generateConfText({ ...cur, ...patch, id: cur.id });
+          } catch (e) {
+            if (e instanceof ConfigError) return send(res, 400, { error: e.message });
+            throw e;
+          }
+          send(res, 200, store.updateSource(id, patch));
+          return;
+        }
+        if (m === 'DELETE') {
+          clearPending(id); // hủy restart đã hẹn (nếu crash trước đó)
+          store.deleteSource(id);
+          send(res, 200, { ok: true });
+          return;
+        }
+      }
+      // GET /api/sources/:id/preview-conf
+      if (id !== undefined && m === 'GET' && seg[3] === 'preview-conf') {
+        const r = store.getSource(id);
+        if (r === undefined) return send(res, 404, { error: `Source ${id} không tồn tại` });
+        const gen = generateConfText({ ...r, confRev: r.confRev });
+        send(res, 200, { conf: gen.content, liveCount: gen.liveCount, confRev: r.confRev });
+        return;
+      }
+      // POST /api/sources/:id/start
+      if (id !== undefined && m === 'POST' && seg[3] === 'start') {
+        const r = store.getSource(id);
+        if (r === undefined) return send(res, 404, { error: `Source ${id} không tồn tại` });
+        const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
+        const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
+        store.setStatus(id, 'RUNNING', pid);
+        send(res, 200, { ok: true, pid, conf: gen.content });
+        return;
+      }
+      // POST /api/sources/:id/stop
+      if (id !== undefined && m === 'POST' && seg[3] === 'stop') {
+        noRestart.add(id); // đánh dấu stop tay để onExit không restart
+        clearPending(id);
+        try {
+          await pm.stop(id);
+        } finally {
+          noRestart.delete(id);
+        }
+        store.setStatus(id, 'STOPPED');
+        send(res, 200, { ok: true });
+        return;
+      }
+    }
+
+    send(res, 404, { error: 'không tìm thấy route' });
+  }
+
+  return {
+    listen: (port = opts.port ?? 0) =>
+      new Promise((resolve) => {
+        void seedAdmin().then(() => {
+          // GC mỗi giờ khi bật VTC_GC_ENABLE=1 (Prod). Test không bật nên không ảnh hưởng.
+          let gcTimer: NodeJS.Timeout | undefined;
+          if (process.env['VTC_GC_ENABLE'] === '1') {
+            gcTimer = setInterval(
+              () => {
+                void runGarbageCollector({
+                  captureDir,
+                  exportsDir,
+                  getRetentionDays: (id) => store.getSource(id)?.retentionDays ?? DEFAULT_RETENTION_DAYS,
+                });
+              },
+              60 * 60 * 1000,
+            );
+            gcTimer.unref?.();
+          }
+          server.listen(port, () => {
+            const addr = server.address();
+            const p = typeof addr === 'object' && addr !== null ? addr.port : port;
+            resolve({
+              port: p,
+              close: () =>
+                new Promise<void>((r) => {
+                  clearInterval(gcTimer);
+                  for (const t of pendingRestarts.values()) clearTimeout(t);
+                  pendingRestarts.clear();
+                  server.close(() => r());
+                }),
+            });
+          });
+        });
+      }),
+  };
+}

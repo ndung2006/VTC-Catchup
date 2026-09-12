@@ -1,0 +1,34 @@
+# TSDuck dev/runtime — Ubuntu 24.04.
+# (Upstream chỉ còn binary mới cho 24.04+; bản 22.04 dừng ở 3.33 từ 2023.
+#  Host Prod cứ giữ 22.04 — container khác OS host không ảnh hưởng tsp.)
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Ho_Chi_Minh
+
+# 1. Base + repo TSDuck (theo https://tsduck.io/download/)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg lsb-release \
+      procps psmisc curl wget file \
+    && curl -fsSL https://download.tsduck.io/ubuntu/tsduck.asc | gpg --dearmor -o /usr/share/keyrings/tsduck.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/tsduck.gpg] https://download.tsduck.io/ubuntu/ $(lsb_release -cs) main" \
+         > /etc/apt/sources.list.d/tsduck.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      tsduck tsduck-dev \
+      build-essential pkg-config git \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Thư mục chuẩn VTC (trùng Prod để không lệch path)
+RUN mkdir -p /media/ramdisk/live \
+             /mnt/Data/catchup/captures \
+             /mnt/Data/catchup/exports \
+             /opt/vtc/conf/sources \
+             /work
+
+WORKDIR /work
+
+# Smoke test lúc build: fail sớm nếu repo sai (không có binary tsplugin —
+# plugin liệt kê bằng `tsp --list-plugin`).
+RUN tsp --version
+
+CMD ["tsp", "--help"]

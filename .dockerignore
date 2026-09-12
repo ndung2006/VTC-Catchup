@@ -1,0 +1,11 @@
+# Root .dockerignore — context build là repo root (docker-compose.yml).
+# Chặn node_modules 2 app + build output + dữ liệu local lọt vào mọi image.
+**/node_modules
+**/dist
+**/.next
+**/*.log
+storage/
+scripts/
+plugins/
+docs/
+.git/

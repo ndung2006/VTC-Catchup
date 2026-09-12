@@ -1,0 +1,15 @@
+# Prod overrides — KHÔNG commit file này khi chứa secret thật.
+# Dùng: docker compose --profile prod -f docker-compose.yml -f compose.prod.yml up -d
+services:
+  backend:
+    volumes:
+      # Ghi đè volume captures bằng HDD/SAN thật:
+      - /mnt/Data/catchup/captures:/mnt/Data/catchup/captures
+      - /mnt/Data/catchup/exports:/mnt/Data/catchup/exports
+      - /opt/vtc/conf/sources:/opt/vtc/conf/sources
+      # RAMDisk host (tmpfs đã mount) — khớp nginx bên dưới, nếu không backend
+      # ghi HLS vào volume rỗng còn nginx serve tmpfs → đen màn hình.
+      - /media/ramdisk/live:/media/ramdisk/live
+  nginx:
+    volumes:
+      - /media/ramdisk/live:/media/ramdisk/live:ro

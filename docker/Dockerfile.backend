@@ -1,0 +1,51 @@
+# Backend Prod — Ubuntu 24.04 + TSDuck + Node 20 trong 1 image.
+# (Upstream chỉ còn binary TSDuck mới cho 24.04+; host Prod giữ 22.04 vẫn chạy
+#  container 24.04 bình thường.)
+# Lý do gộp: backend spawn `tsp` làm child process (kế thừa net namespace của
+# container) nên container backend cần network_mode:host để bắt multicast.
+# Tách image riêng (node:alpine) chỉ dùng được khi tsp chạy ngoài host.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Ho_Chi_Minh \
+    NODE_MAJOR=20
+
+# 1. TSDuck repo chính thức + NodeSource.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg lsb-release procps \
+    && curl -fsSL https://download.tsduck.io/ubuntu/tsduck.asc | gpg --dearmor -o /usr/share/keyrings/tsduck.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/tsduck.gpg] https://download.tsduck.io/ubuntu/ $(lsb_release -cs) main" \
+         > /etc/apt/sources.list.d/tsduck.list \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" \
+         > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      tsduck nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version && tsp --version
+
+# 2. Thư mục chuẩn VTC (trùng path trong code).
+RUN mkdir -p /media/ramdisk/live \
+             /mnt/Data/catchup/captures \
+             /mnt/Data/catchup/exports \
+             /opt/vtc/conf/sources \
+             /app
+
+WORKDIR /app
+
+# 3. Build backend (tận dụng cache layer: deps trước, source sau).
+COPY apps/backend/package.json apps/backend/package-lock.json apps/backend/tsconfig.json ./
+RUN npm ci
+COPY apps/backend/src ./src
+RUN ./node_modules/.bin/tsc -p tsconfig.json && npm prune --omit=dev
+
+ENV PORT=8080 \
+    VTC_CONF_DIR=/opt/vtc/conf/sources \
+    VTC_CAPTURE_DIR=/mnt/Data/catchup/captures \
+    VTC_EXPORTS_DIR=/mnt/Data/catchup/exports \
+    VTC_LIVE_DIR=/media/ramdisk/live
+
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)})" || exit 1
+CMD ["node", "dist/server.js"]

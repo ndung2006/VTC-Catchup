@@ -1,0 +1,116 @@
+//=============================================================================
+// store.ts — Lưu trữ in-memory cho Phase 2a (thay bằng Prisma+Postgres ở Phase 2b).
+// Giữ API nhỏ, rõ ràng để thay store sau này không phải sửa server.ts.
+//=============================================================================
+
+import type { SourceConfig } from '../core/types.js';
+import type { UserRecord } from './auth.js';
+
+/** Bản ghi Source kèm rev + trạng thái (DB thật sẽ thêm pid, createdAt...). */
+export interface SourceRecord extends SourceConfig {
+  confRev: number;
+  status: 'RUNNING' | 'STOPPED' | 'ERROR';
+  pid?: number;
+}
+
+export class Store {
+  private readonly sources = new Map<string, SourceRecord>();
+  private readonly users = new Map<string, UserRecord>();
+
+  listSources(): SourceRecord[] {
+    return [...this.sources.values()];
+  }
+
+  getSource(id: string): SourceRecord | undefined {
+    return this.sources.get(id);
+  }
+
+  /** Tạo mới (id duy nhất). confRev bắt đầu từ 1. */
+  createSource(s: SourceConfig): SourceRecord {
+    if (this.sources.has(s.id)) {
+      throw new Error(`Source ${s.id} đã tồn tại`);
+    }
+    const rec: SourceRecord = { ...s, confRev: 1, status: 'STOPPED' };
+    this.sources.set(s.id, rec);
+    return rec;
+  }
+
+  /** Sửa cấu hình (đổi input/channels/recordAll) → tăng confRev. */
+  updateSource(id: string, patch: Partial<SourceConfig>): SourceRecord {
+    const cur = this.sources.get(id);
+    if (cur === undefined) throw new Error(`Source ${id} không tồn tại`);
+    if (cur.status === 'RUNNING') {
+      throw new Error(`Source ${id} đang RUNNING — stop trước khi sửa (cần restart graceful)`);
+    }
+    const next: SourceRecord = {
+      ...cur,
+      ...patch,
+      id: cur.id, // không cho đổi id
+      confRev: cur.confRev + 1,
+      status: 'STOPPED' as const,
+    };
+    this.sources.set(id, next);
+    return next;
+  }
+
+  deleteSource(id: string): void {
+    const cur = this.sources.get(id);
+    if (cur === undefined) throw new Error(`Source ${id} không tồn tại`);
+    if (cur.status === 'RUNNING') {
+      throw new Error(`Source ${id} đang RUNNING — stop trước khi xóa`);
+    }
+    this.sources.delete(id);
+  }
+
+  setStatus(id: string, status: SourceRecord['status'], pid?: number): void {
+    const cur = this.sources.get(id);
+    if (cur === undefined) return;
+    cur.status = status;
+    if (pid === undefined) {
+      delete cur.pid;
+    } else {
+      cur.pid = pid;
+    }
+  }
+
+  //-- Users (bảng users ở Phase 2b) -----------------------------------------
+
+  /** Seed user (dùng lúc boot server). Ghi đè nếu username đã có. */
+  seedUser(u: UserRecord): void {
+    this.users.set(u.username, { ...u });
+  }
+
+  findUser(username: string): UserRecord | undefined {
+    return this.users.get(username);
+  }
+
+  findUserByEmail(email: string): UserRecord | undefined {
+    const want = email.trim().toLowerCase();
+    for (const u of this.users.values()) {
+      if (u.email.toLowerCase() === want) return u;
+    }
+    return undefined;
+  }
+
+  findUserByResetToken(token: string): UserRecord | undefined {
+    for (const u of this.users.values()) {
+      if (u.resetToken === token && (u.resetExpires ?? 0) > Date.now()) return u;
+    }
+    return undefined;
+  }
+
+  setResetToken(username: string, token: string, expires: number): void {
+    const u = this.users.get(username);
+    if (u === undefined) return;
+    u.resetToken = token;
+    u.resetExpires = expires;
+  }
+
+  setPasswordHash(username: string, hash: string): void {
+    const u = this.users.get(username);
+    if (u === undefined) return;
+    u.passwordHash = hash;
+    delete u.resetToken;
+    delete u.resetExpires;
+  }
+}
