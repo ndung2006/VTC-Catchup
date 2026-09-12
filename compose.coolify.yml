@@ -34,6 +34,10 @@ services:
       - /mnt/Data/catchup/captures:/mnt/Data/catchup/captures
       - /mnt/Data/catchup/exports:/mnt/Data/catchup/exports
       - /opt/vtc/conf/sources:/opt/vtc/conf/sources
+      # Ép Coolify sync ./apps (nó chỉ sync path trong volumes, bỏ qua path
+      # trong `dockerfile:`) — build COPY apps/backend/* cần thư mục này.
+      # Mount ro, runtime không dùng.
+      - ./apps:/work/apps-src:ro
     restart: unless-stopped
 
   frontend:
