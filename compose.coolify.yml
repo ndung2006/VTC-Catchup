@@ -19,7 +19,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.backend
+      dockerfile: Dockerfile.backend
     container_name: vtc-backend
     init: true
     network_mode: "host" # bắt multicast trực tiếp (PRD §11)
@@ -39,7 +39,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.frontend
+      dockerfile: Dockerfile.frontend
     container_name: vtc-frontend
     init: true
     extra_hosts:

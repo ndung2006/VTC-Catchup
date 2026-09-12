@@ -10,8 +10,8 @@
 |---|---|---|
 | `tsduck` (demo) | `docker/Dockerfile.tsduck` | Ubuntu 24.04 + tsp, `sleep infinity` để exec demo |
 | `demo-hls` (dev) | `nginx:alpine` + `docker/nginx.demo.conf` | serve `./storage/ramdisk` ở :8081 để xem Live local |
-| `backend` (prod) | `docker/Dockerfile.backend` | Ubuntu 24.04 + tsduck + Node 20: backend spawn tsp con cùng net namespace |
-| `frontend` (prod) | `docker/Dockerfile.frontend` | multi-stage, chạy `.next/standalone` user `nextjs` |
+| `backend` (prod) | `Dockerfile.backend` | Ubuntu 24.04 + tsduck + Node 20: backend spawn tsp con cùng net namespace |
+| `frontend` (prod) | `Dockerfile.frontend` | multi-stage, chạy `.next/standalone` user `nextjs` |
 | `nginx` (prod) | `nginx:1.27-alpine` + `docker/nginx.conf` | cửa vào :80 duy nhất |
 
 Vì sao backend gộp chung với tsp thay vì `node:alpine` riêng: `tsp` là child process kế thừa network namespace của container — tách image thì child không bắt được multicast của host.
