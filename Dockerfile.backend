@@ -5,15 +5,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Ho_Chi_Minh \
     NODE_MAJOR=20
 
-# 1. Cài đặt TSDuck từ kho mặc định của Ubuntu (bỏ qua máy chủ tsduck.io đang lỗi) + Node.js
+# 1. Cài đặt Node.js và các công cụ cần thiết. Tải TSDuck (bản Debian 12 Bookworm) trực tiếp bằng wget.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg lsb-release procps wget \
-      tsduck tsduck-dev \
+      ca-certificates curl gnupg lsb-release procps wget libedit2 libpcsclite1 libsrt1.5-openssl libusb-1.0-0 \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL --retry 5 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
+    && wget -qO tsduck.deb http://ftp.us.debian.org/debian/pool/main/t/tsduck/tsduck_3.33-3139-1_amd64.deb \
+    && wget -qO tsduck-dev.deb http://ftp.us.debian.org/debian/pool/main/t/tsduck/tsduck-dev_3.33-3139-1_amd64.deb \
+    && apt-get install -y --no-install-recommends ./tsduck.deb ./tsduck-dev.deb \
+    && rm -rf /var/lib/apt/lists/* tsduck.deb tsduck-dev.deb \
     && node --version && tsp --version
 
 # 2. Thư mục chuẩn VTC (trùng path trong code).
