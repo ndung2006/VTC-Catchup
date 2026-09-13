@@ -6,6 +6,8 @@
  // Endpoints auth: xem docs/07-AUTH.md.
  //=============================================================================
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { generateConfText, writeConfFile, DEFAULT_CONF_DIR, ConfigError } from '../core/ConfigGenerator.js';
 import { ProcessManager } from '../core/ProcessManager.js';
 import { Store } from './store.js';
@@ -43,6 +45,12 @@ export interface ApiOptions {
   adminUser?: string;
   adminPass?: string;
   adminEmail?: string;
+  /** File JSON persist danh sách sources (mặc định <confDir>/sources.db.json). */
+  storeFile?: string;
+  /** Tắt persist (test truyền false để isolation). Mặc định true, trừ khi VTC_PERSIST=0. */
+  persist?: boolean;
+  /** Tự start lại các source đã RUNNING trước khi restart container. Mặc định true. */
+  autoStart?: boolean;
 }
 
 /** Message chung cho login sai (không lộ user nào tồn tại). */
@@ -116,6 +124,46 @@ export function createApi(opts: ApiOptions = {}): {
   const store = new Store();
   const pm = opts.tspBin === undefined ? new ProcessManager() : new ProcessManager({ tspBin: opts.tspBin });
   const confDir = opts.confDir ?? DEFAULT_CONF_DIR;
+  //-- Persist sources ra JSON để restart container/Coolify không mất cấu hình --
+  const persistEnabled = opts.persist ?? process.env['VTC_PERSIST'] !== '0';
+  const storeFile = opts.storeFile ?? `${confDir.replace(/\/$/, '')}/sources.db.json`;
+  const autoStartEnabled = opts.autoStart ?? process.env['VTC_AUTOSTART'] !== '0';
+  function savePersisted(): void {
+    if (!persistEnabled) return;
+    try {
+      mkdirSync(dirname(storeFile), { recursive: true });
+      const tmp = `${storeFile}.tmp`;
+      writeFileSync(tmp, JSON.stringify(store.listSources(), null, 2), 'utf8');
+      renameSync(tmp, storeFile);
+    } catch {
+      // Ghi persist thất bại thì log, không chặn nghiệp vụ chính.
+      // eslint-disable-next-line no-console
+      console.warn(`[vtc-api][WARN] không ghi được ${storeFile}`);
+    }
+  }
+  function loadPersisted(): string[] {
+    if (!persistEnabled) return [];
+    try {
+      if (!existsSync(storeFile)) return [];
+      const raw = readFileSync(storeFile, 'utf8');
+      const arr = JSON.parse(raw) as unknown;
+      if (!Array.isArray(arr)) return [];
+      const wasRunning: string[] = [];
+      for (const r of arr) {
+        const rec = r as Parameters<Store['restore']>[0];
+        if (typeof rec.id !== 'string' || rec.id === '') continue;
+        if (rec.status === 'RUNNING') wasRunning.push(rec.id);
+        try {
+          store.restore(rec);
+        } catch {
+          // bản ghi hỏng thì bỏ qua
+        }
+      }
+      return wasRunning;
+    } catch {
+      return [];
+    }
+  }
   const captureDir = opts.captureDir ?? process.env['VTC_CAPTURE_DIR'] ?? 'storage/captures';
   const exportsDir = opts.exportsDir ?? process.env['VTC_EXPORTS_DIR'] ?? 'storage/exports';
   const liveDir = opts.liveDir ?? process.env['VTC_LIVE_DIR'] ?? 'storage/ramdisk';
@@ -145,7 +193,10 @@ export function createApi(opts: ApiOptions = {}): {
     }
   };
   pm.setHandlers({
-    onStatus: (id, s) => store.setStatus(id, s, pm.getPid(id)),
+    onStatus: (id, s) => {
+      store.setStatus(id, s, pm.getPid(id));
+      savePersisted();
+    },
     onCcError: (ev) => {
       void notifier.alert(
         `cc:${ev.sourceId}`,
@@ -161,6 +212,8 @@ export function createApi(opts: ApiOptions = {}): {
         `exit:${id}`,
         processAlertText(id, `Tiến trình tsp dừng đột ngột (${why})`, 'Đang tiến hành Auto-restart...'),
       );
+      store.setStatus(id, 'ERROR');
+      savePersisted();
       clearPending(id);
       const t = setTimeout(() => {
         pendingRestarts.delete(id);
@@ -170,6 +223,7 @@ export function createApi(opts: ApiOptions = {}): {
           const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
           const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
           store.setStatus(id, 'RUNNING', pid);
+          savePersisted();
         } catch {
           // tsp missing/conf lỗi: giữ ERROR, chờ operator sửa + start tay.
         }
@@ -448,6 +502,7 @@ export function createApi(opts: ApiOptions = {}): {
           throw e;
         }
         const rec = store.createSource(body);
+        savePersisted();
         send(res, 201, rec);
         return;
       }
@@ -467,12 +522,20 @@ export function createApi(opts: ApiOptions = {}): {
             if (e instanceof ConfigError) return send(res, 400, { error: e.message });
             throw e;
           }
-          send(res, 200, store.updateSource(id, patch));
+          const updated = store.updateSource(id, patch);
+          savePersisted();
+          send(res, 200, updated);
           return;
         }
         if (m === 'DELETE') {
           clearPending(id); // hủy restart đã hẹn (nếu crash trước đó)
+          try {
+            await pm.stop(id).catch(() => {});
+          } catch {
+            // chưa chạy thì thôi
+          }
           store.deleteSource(id);
+          savePersisted();
           send(res, 200, { ok: true });
           return;
         }
@@ -492,6 +555,7 @@ export function createApi(opts: ApiOptions = {}): {
         const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
         const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
         store.setStatus(id, 'RUNNING', pid);
+        savePersisted();
         send(res, 200, { ok: true, pid, conf: gen.content });
         return;
       }
@@ -505,6 +569,7 @@ export function createApi(opts: ApiOptions = {}): {
           noRestart.delete(id);
         }
         store.setStatus(id, 'STOPPED');
+        savePersisted();
         send(res, 200, { ok: true });
         return;
       }
@@ -517,6 +582,22 @@ export function createApi(opts: ApiOptions = {}): {
     listen: (port = opts.port ?? 0) =>
       new Promise((resolve) => {
         void seedAdmin().then(() => {
+          // Nạp cấu hình đã persist (restart container không mất sources).
+          const wasRunning = loadPersisted();
+          if (autoStartEnabled) {
+            for (const sid of wasRunning) {
+              const r = store.getSource(sid);
+              if (r === undefined) continue;
+              try {
+                const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
+                const pid = pm.start(sid, gen.filePath ?? `${confDir}/${sid}.conf`);
+                store.setStatus(sid, 'RUNNING', pid);
+              } catch {
+                store.setStatus(sid, 'ERROR');
+              }
+            }
+            if (wasRunning.length > 0) savePersisted();
+          }
           // GC mỗi giờ khi bật VTC_GC_ENABLE=1 (Prod). Test không bật nên không ảnh hưởng.
           let gcTimer: NodeJS.Timeout | undefined;
           if (process.env['VTC_GC_ENABLE'] === '1') {

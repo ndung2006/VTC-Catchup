@@ -28,10 +28,54 @@ async function json<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface SourceInput {
+  id: string;
+  input: string;
+  channels: { name: string; serviceId: number; isLive: boolean }[];
+  recordAll: boolean;
+  retentionDays?: number;
+}
+
+export interface PreviewConf {
+  conf: string;
+  liveCount: number;
+  confRev: number;
+}
+
 export const api = {
   sources: () => fetch('/api/sources', { credentials: 'include' }).then((r) => json<Source[]>(r)),
   source: (id: string) =>
     fetch(`/api/sources/${encodeURIComponent(id)}`, { credentials: 'include' }).then((r) => json<Source>(r)),
+  createSource: (body: SourceInput) =>
+    fetch('/api/sources', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then((r) => json<Source>(r)),
+  updateSource: (id: string, patch: Partial<SourceInput>) =>
+    fetch(`/api/sources/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).then((r) => json<Source>(r)),
+  deleteSource: (id: string) =>
+    fetch(`/api/sources/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' }).then((r) =>
+      json<{ ok: boolean }>(r),
+    ),
+  startSource: (id: string) =>
+    fetch(`/api/sources/${encodeURIComponent(id)}/start`, { method: 'POST', credentials: 'include' }).then((r) =>
+      json<{ ok: boolean; pid: number; conf: string }>(r),
+    ),
+  stopSource: (id: string) =>
+    fetch(`/api/sources/${encodeURIComponent(id)}/stop`, { method: 'POST', credentials: 'include' }).then((r) =>
+      json<{ ok: boolean }>(r),
+    ),
+  previewConf: (id: string) =>
+    fetch(`/api/sources/${encodeURIComponent(id)}/preview-conf`, { credentials: 'include' }).then((r) =>
+      json<PreviewConf>(r),
+    ),
   login: (username: string, password: string) =>
     fetch('/api/auth/login', {
       method: 'POST',

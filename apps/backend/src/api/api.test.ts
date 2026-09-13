@@ -45,6 +45,8 @@ describe('API', { concurrency: false }, () => {
       tspBin: fakeTsp,
       jwtSecret: 'test-secret',
       adminPass: 'test-admin-123',
+      persist: false,
+      autoStart: false,
     });
     const s = await api.listen(0);
     base = `http://127.0.0.1:${s.port}`;
@@ -321,6 +323,8 @@ describe('auto-restart', { concurrency: false }, () => {
       jwtSecret: 'test-secret',
       adminPass: 'pw-restart-1',
       restartDelayMs: 150,
+      persist: false,
+      autoStart: false,
     });
     const s = await api.listen(0);
     const b = `http://127.0.0.1:${s.port}`;

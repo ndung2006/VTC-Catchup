@@ -73,6 +73,21 @@ export class Store {
     }
   }
 
+  /** Khôi phục bản ghi đã persist (dùng lúc boot, ghi đè nếu trùng id). */
+  restore(rec: SourceRecord): void {
+    const norm: SourceRecord = {
+      ...rec,
+      confRev: typeof rec.confRev === 'number' && rec.confRev >= 1 ? Math.floor(rec.confRev) : 1,
+      status: rec.status === 'RUNNING' || rec.status === 'STOPPED' || rec.status === 'ERROR' ? rec.status : 'STOPPED',
+    };
+    if (norm.status === 'RUNNING') {
+      // PID cũ đã chết theo container — hạ về STOPPED, boot sẽ auto-start lại.
+      norm.status = 'STOPPED';
+      delete norm.pid;
+    }
+    this.sources.set(norm.id, norm);
+  }
+
   //-- Users (bảng users ở Phase 2b) -----------------------------------------
 
   /** Seed user (dùng lúc boot server). Ghi đè nếu username đã có. */
