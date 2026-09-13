@@ -17,13 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Biên dịch TSDuck từ mã nguồn Github (Phiên bản v3.39 mới và ổn định, Build mất khoảng ~3 phút)
-# Biên dịch cấu hình chuẩn nhất để tránh lỗi Missing Symbols ở bước Linking
+# 2. Biên dịch TSDuck từ mã nguồn Github (Bỏ qua biên dịch tài liệu HTML docs)
 WORKDIR /tmp
 RUN git clone --branch v3.39-3956 --depth 1 https://github.com/tsduck/tsduck.git \
     && cd tsduck \
     && make -j$(nproc) NOTEST=1 \
-    && make install \
+    && make install-tools \
     && cd /tmp && rm -rf tsduck \
     && node --version && tsp --version
 
