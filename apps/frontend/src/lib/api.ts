@@ -85,6 +85,27 @@ export const api = {
     }).then((r) => json<{ ok: boolean }>(r)),
   logout: () =>
     fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).then((r) => json<{ ok: boolean }>(r)),
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) =>
+    fetch('/api/auth/change-password', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    }).then((r) => json<{ ok: boolean }>(r)),
+  forgotPassword: (email: string) =>
+    fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    }).then((r) => json<{ message: string }>(r)),
+  resetPassword: (token: string, newPassword: string) =>
+    fetch('/api/auth/reset-password', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, newPassword }),
+    }).then((r) => json<{ ok: boolean }>(r)),
   hlsHealth: () =>
     fetch('/api/admin/hls-health', { credentials: 'include' }).then((r) =>
       json<{ channel: string; ageSec: number | null; stale: boolean }[]>(r),

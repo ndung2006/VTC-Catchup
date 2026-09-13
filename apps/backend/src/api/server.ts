@@ -170,8 +170,8 @@ export function createApi(opts: ApiOptions = {}): {
   const notifier = new TelegramNotifier(); // đọc VTC_TELEGRAM_* từ env, thiếu thì log
   const exporter =
     opts.tspBin === undefined
-      ? new Exporter({ captureDir, exportsDir })
-      : new Exporter({ captureDir, exportsDir, tspBin: opts.tspBin });
+      ? new Exporter({ captureDir, exportsDir, persist: persistEnabled })
+      : new Exporter({ captureDir, exportsDir, tspBin: opts.tspBin, persist: persistEnabled });
   const jwtSecret = opts.jwtSecret ?? process.env['VTC_JWT_SECRET'] ?? 'dev-only-insecure-secret';
   if (process.env['VTC_JWT_SECRET'] === undefined && opts.jwtSecret === undefined) {
     // eslint-disable-next-line no-console
@@ -613,6 +613,61 @@ export function createApi(opts: ApiOptions = {}): {
             );
             gcTimer.unref?.();
           }
+          // Watchdog HLS 30s (PRD rủi ro #4): playlist đứng >15s dù process RUNNING
+          // → restart source chứa kênh stale + bắn Telegram. Cooldown 5'/source.
+          // Test xong trước tick đầu (30s) nên không ảnh hưởng; tắt hẳn bằng VTC_HLS_WATCHDOG=0.
+          let watchdogTimer: NodeJS.Timeout | undefined;
+          const lastWatchdogRestart = new Map<string, number>();
+          const watchdogEnabled = process.env['VTC_HLS_WATCHDOG'] !== '0';
+          async function watchdogTick(): Promise<void> {
+            let health: Awaited<ReturnType<typeof checkHlsHealth>>;
+            try {
+              health = await checkHlsHealth(liveDir, 15);
+            } catch {
+              return;
+            }
+            const staleChannels = new Set(health.filter((h) => h.stale).map((h) => h.channel));
+            if (staleChannels.size === 0) return;
+            const now = Date.now();
+            const targets = store
+              .listSources()
+              .filter((s) => s.status === 'RUNNING' && s.channels.some((c) => staleChannels.has(c.name)));
+            for (const t of targets) {
+              const last = lastWatchdogRestart.get(t.id) ?? 0;
+              if (now - last < 5 * 60 * 1000) continue;
+              lastWatchdogRestart.set(t.id, now);
+              const staleHere = t.channels.filter((c) => staleChannels.has(c.name)).map((c) => c.name);
+              void notifier.alert(
+                `hls:${t.id}`,
+                processAlertText(
+                  t.id,
+                  `HLS stale (${staleHere.join(', ')}) — playlist đứng >15s`,
+                  'Đang restart source để phục hồi live...',
+                ),
+              );
+              noRestart.add(t.id);
+              clearPending(t.id);
+              try {
+                await pm.stop(t.id).catch(() => {});
+              } finally {
+                noRestart.delete(t.id);
+              }
+              const cur = store.getSource(t.id);
+              if (cur === undefined) continue;
+              try {
+                const gen = writeConfFile({ ...cur, confRev: cur.confRev }, confDir);
+                const pid = pm.start(t.id, gen.filePath ?? `${confDir}/${t.id}.conf`);
+                store.setStatus(t.id, 'RUNNING', pid);
+              } catch {
+                store.setStatus(t.id, 'ERROR');
+              }
+              savePersisted();
+            }
+          }
+          if (watchdogEnabled) {
+            watchdogTimer = setInterval(() => void watchdogTick(), 30 * 1000);
+            watchdogTimer.unref?.();
+          }
           server.listen(port, () => {
             const addr = server.address();
             const p = typeof addr === 'object' && addr !== null ? addr.port : port;
@@ -621,6 +676,7 @@ export function createApi(opts: ApiOptions = {}): {
               close: () =>
                 new Promise<void>((r) => {
                   clearInterval(gcTimer);
+                  clearInterval(watchdogTimer);
                   for (const t of pendingRestarts.values()) clearTimeout(t);
                   pendingRestarts.clear();
                   server.close(() => r());

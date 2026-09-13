@@ -8,9 +8,11 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 const PROTECTED = ['/', '/dashboard', '/sources', '/channels', '/exports', '/channel'];
 
+const PUBLIC = ['/login', '/forgot-password', '/reset-password'];
+
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
-  if (pathname === '/login') return NextResponse.next();
+  if (PUBLIC.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return NextResponse.next();
   const needGuard = PROTECTED.some((p) => (p === '/' ? pathname === '/' : pathname.startsWith(p)));
   if (needGuard && req.cookies.get('vtc_token') === undefined) {
     return NextResponse.redirect(new URL('/login', req.url));

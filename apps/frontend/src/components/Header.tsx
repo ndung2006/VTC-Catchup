@@ -25,6 +25,15 @@ export function Header({ onMenu }: { onMenu: () => void }): React.JSX.Element {
         {open && (
           <div className="absolute right-0 mt-2 w-44 rounded border bg-white py-1 text-sm shadow">
             <button
+              onClick={() => {
+                setOpen(false);
+                router.push('/account');
+              }}
+              className="block w-full px-3 py-2 text-left hover:bg-slate-100"
+            >
+              Đổi mật khẩu
+            </button>
+            <button
               onClick={logout}
               className="block w-full px-3 py-2 text-left hover:bg-slate-100"
             >

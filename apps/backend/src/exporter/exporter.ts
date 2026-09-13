@@ -9,7 +9,7 @@
 //=============================================================================
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diskPercentAt } from '../api/system.js';
@@ -52,6 +52,10 @@ export interface ExporterOptions {
   maxHours?: number;
   chunkMs?: number;
   getDiskPercent?: () => Promise<number | null>;
+  /** Persist lịch sử jobs ra JSON (mặc định true, trừ khi VTC_PERSIST=0). */
+  persist?: boolean;
+  /** File persist (mặc định <exportsDir>/exports.db.json). */
+  persistFile?: string;
 }
 
 export class ExportError extends Error {}
@@ -89,6 +93,8 @@ export class Exporter extends EventEmitter {
   private readonly maxHours: number;
   private readonly chunkMs: number;
   private readonly getDiskPercent: (() => Promise<number | null>) | undefined;
+  private readonly persistEnabled: boolean;
+  private readonly persistFile: string;
 
   constructor(opts: ExporterOptions) {
     super();
@@ -99,7 +105,44 @@ export class Exporter extends EventEmitter {
     this.maxHours = opts.maxHours ?? MAX_EXPORT_HOURS;
     this.chunkMs = opts.chunkMs ?? CAPTURE_CHUNK_MS;
     this.getDiskPercent = opts.getDiskPercent;
+    this.persistEnabled = opts.persist ?? process.env['VTC_PERSIST'] !== '0';
+    this.persistFile = opts.persistFile ?? join(opts.exportsDir, 'exports.db.json');
     mkdirSync(this.exportsDir, { recursive: true });
+    this.loadPersisted();
+  }
+
+  /** Nạp lịch sử đã lưu; job dở dang (QUEUED/PROCESSING) hạ về ERROR do restart. */
+  private loadPersisted(): void {
+    if (!this.persistEnabled) return;
+    try {
+      if (!existsSync(this.persistFile)) return;
+      const arr = JSON.parse(readFileSync(this.persistFile, 'utf8')) as unknown;
+      if (!Array.isArray(arr)) return;
+      for (const r of arr.slice(-500)) {
+        const j = r as ExportJob;
+        if (typeof j.id !== 'string' || typeof j.filePath !== 'string') continue;
+        if (j.status === 'QUEUED' || j.status === 'PROCESSING') {
+          j.status = 'ERROR';
+          j.error = 'Gián đoạn do server restart — vui lòng gửi lại yêu cầu';
+        }
+        if (typeof j.size !== 'number') j.size = null;
+        this.jobs.set(j.id, j);
+      }
+    } catch {
+      // file hỏng thì bắt đầu trắng
+    }
+  }
+
+  private savePersisted(): void {
+    if (!this.persistEnabled) return;
+    try {
+      const arr = this.list().slice(0, 500);
+      const tmp = `${this.persistFile}.tmp`;
+      writeFileSync(tmp, JSON.stringify(arr, null, 2), 'utf8');
+      renameSync(tmp, this.persistFile);
+    } catch {
+      // không chặn nghiệp vụ
+    }
   }
 
   list(): ExportJob[] {
@@ -149,6 +192,7 @@ export class Exporter extends EventEmitter {
     };
     this.jobs.set(id, job);
     this.queue.push(id);
+    this.savePersisted();
     this.pump();
     return job;
   }
@@ -169,6 +213,7 @@ export class Exporter extends EventEmitter {
       /* file đã mất — vẫn xóa record */
     }
     this.jobs.delete(id);
+    this.savePersisted();
   }
 
   /** Map khoảng In/Out → danh sách chunk vật lý (theo mtime overlap). */
@@ -205,9 +250,11 @@ export class Exporter extends EventEmitter {
       this.running++;
       job.status = 'PROCESSING';
       this.emit('status', job);
+      this.savePersisted();
       void this.execute(job).finally(() => {
         this.running--;
         this.emit('status', job);
+        this.savePersisted();
         this.pump();
       });
     }
@@ -255,6 +302,7 @@ export class Exporter extends EventEmitter {
   private async fail(job: ExportJob, error: string): Promise<void> {
     job.status = 'ERROR';
     job.error = error;
+    this.savePersisted();
     try {
       await unlink(job.filePath);
     } catch {

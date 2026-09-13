@@ -40,6 +40,9 @@ export default function Login(): React.JSX.Element {
         />
         {error !== '' && <p className="text-sm text-red-600">{error}</p>}
         <button className="w-full rounded bg-slate-900 py-2 text-sm text-white">Đăng nhập</button>
+        <a href="/forgot-password" className="block text-center text-sm text-slate-500">
+          Quên mật khẩu?
+        </a>
       </form>
     </main>
   );
