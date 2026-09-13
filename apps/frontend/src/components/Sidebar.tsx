@@ -50,6 +50,9 @@ export function Sidebar(): React.JSX.Element {
         <Link href="/exports" className="block rounded px-2 py-1.5 hover:bg-slate-800">
           Trích xuất
         </Link>
+        <Link href="/admin" className="block rounded px-2 py-1.5 hover:bg-slate-800">
+          Quản trị
+        </Link>
       </nav>
     </aside>
   );

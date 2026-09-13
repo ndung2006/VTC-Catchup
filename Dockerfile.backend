@@ -33,6 +33,7 @@ RUN mkdir -p /media/ramdisk/live \
              /mnt/Data/catchup/captures \
              /mnt/Data/catchup/exports \
              /opt/vtc/conf/sources \
+             /app/storage/logs \
              /app
 
 WORKDIR /app
@@ -47,7 +48,9 @@ ENV PORT=8080 \
     VTC_CONF_DIR=/opt/vtc/conf/sources \
     VTC_CAPTURE_DIR=/mnt/Data/catchup/captures \
     VTC_EXPORTS_DIR=/mnt/Data/catchup/exports \
-    VTC_LIVE_DIR=/media/ramdisk/live
+    VTC_LIVE_DIR=/media/ramdisk/live \
+    VTC_LOG_DIR=/app/storage/logs \
+    VTC_GC_ENABLE=1
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)})" || exit 1

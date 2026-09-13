@@ -3,6 +3,8 @@
 // Anti-spam: cooldown theo key (mặc định 5 phút/source) — sự cố kéo dài không
 // bắn mỗi giây. Chưa cấu hình token/chat → log console (dev), không crash.
 //=============================================================================
+import { logger } from '../core/logger.js';
+
 export type NotifyResult = 'sent' | 'skipped-cooldown' | 'logged' | 'error';
 
 export interface NotifierOptions {
@@ -43,8 +45,7 @@ export class TelegramNotifier {
     if (now - last < this.cooldownMs) return 'skipped-cooldown';
 
     if (!this.configured) {
-      // eslint-disable-next-line no-console
-      console.log(`[vtc-notify][${key}] ${text}`);
+      logger.info(`[notify][${key}] ${text}`);
       this.lastSent.set(key, now);
       return 'logged';
     }

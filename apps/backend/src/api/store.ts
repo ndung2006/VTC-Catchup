@@ -62,6 +62,25 @@ export class Store {
     this.sources.delete(id);
   }
 
+  /**
+   * Thay toàn bộ danh sách (dùng cho config-restore).
+   * Ném lỗi nếu bất kỳ source nào đang RUNNING (kể cả trong store lẫn bản mới).
+   */
+  replaceAll(records: SourceConfig[]): void {
+    for (const s of this.sources.values()) {
+      if (s.status === 'RUNNING') {
+        throw new Error(`Source ${s.id} đang RUNNING — stop hết trước khi phục hồi cấu hình`);
+      }
+    }
+    const next = new Map<string, SourceRecord>();
+    for (const s of records) {
+      if (next.has(s.id)) throw new Error(`trùng id ${s.id} trong file phục hồi`);
+      next.set(s.id, { ...s, confRev: 1, status: 'STOPPED' });
+    }
+    this.sources.clear();
+    for (const [k, v] of next) this.sources.set(k, v);
+  }
+
   setStatus(id: string, status: SourceRecord['status'], pid?: number): void {
     const cur = this.sources.get(id);
     if (cur === undefined) return;

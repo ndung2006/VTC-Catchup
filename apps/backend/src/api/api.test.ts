@@ -6,6 +6,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { createApi } from './server.js';
+import { setLogDir } from '../core/logger.js';
 
 const fakeTsp = '/tmp/vtc-fake-api-tsp.sh';
 const confDir = '/tmp/vtc-test-conf';
@@ -13,6 +14,7 @@ const capsDir = '/tmp/vtc-test-caps';
 const expsDir = '/tmp/vtc-test-exps';
 
 before(() => {
+  setLogDir('/tmp/vtc-test-api-logs'); // logger không ghi vào repo
   // Fake tsp 2 chế độ: arg cuối *.ts → ghi output + exit 0 (export);
   // ngược lại exec sleep (start/stop process dài hạn).
   writeFileSync(
@@ -212,6 +214,62 @@ describe('API', { concurrency: false }, () => {
     assert.equal(h.status, 200);
   });
 
+  it('admin notify + backup/restore cần auth, roundtrip đúng', async () => {
+    const noAuth = await fetch(`${base}/api/admin/notify-test`, { method: 'POST' });
+    assert.equal(noAuth.status, 401);
+
+    let r = await req('/api/admin/notify-status');
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as { configured: boolean }).configured, false);
+
+    r = await req('/api/admin/notify-test', { method: 'POST' });
+    assert.equal(r.status, 200);
+    const nt = (await r.json()) as { result: string };
+    assert.equal(nt.result, 'logged'); // chưa cấu hình Telegram → log
+
+    r = await req('/api/admin/config-backup');
+    assert.equal(r.status, 200);
+    const bak = (await r.json()) as { sources: { id: string }[] };
+    assert.ok(Array.isArray(bak.sources) && bak.sources.length >= 1);
+
+    // Body sai → 400
+    r = await req('/api/admin/config-restore', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sources: [{ id: 'Xấu!!' }] }),
+    });
+    assert.equal(r.status, 400);
+
+    // Restore đúng → thay toàn bộ, backup cũ vẫn phục hồi được
+    r = await req('/api/admin/config-restore', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sources: [
+          {
+            id: 'RSB',
+            input: 'file /tmp/x.ts',
+            recordAll: false,
+            channels: [{ name: 'c9', serviceId: 9, isLive: true }],
+          },
+        ],
+      }),
+    });
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as { count: number }).count, 1);
+    let list = (await (await req('/api/sources')).json()) as { id: string }[];
+    assert.deepEqual(list.map((s) => s.id), ['RSB']);
+
+    r = await req('/api/admin/config-restore', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sources: bak.sources }),
+    });
+    assert.equal(r.status, 200);
+    list = (await (await req('/api/sources')).json()) as { id: string }[];
+    assert.ok(list.some((s) => s.id === 'API1'));
+  });
+
   it('exports: submit → poll SUCCESS → download → delete', async () => {
     // Seed 1 chunk catchup cho S1 phủ thời điểm hiện tại.
     const { mkdirSync: mk, writeFileSync: wr } = await import('node:fs');
@@ -313,7 +371,9 @@ describe('API', { concurrency: false }, () => {
 describe('auto-restart', { concurrency: false }, () => {
   it('crash → ERROR → tự RUNNING lại; stop tay thì ở yên STOPPED', async () => {
     const fakeExit = '/tmp/vtc-fake-exit3.sh';
-    writeFileSync(fakeExit, '#!/bin/sh\nexit 3\n', 'utf8');
+    // Sống 0.3s rồi mới exit 3: cửa sổ RUNNING đủ rộng để poll 50ms bắt được,
+    // tránh flaky khi máy tải nặng (trước đây exit ngay → RUNNING chỉ vài ms).
+    writeFileSync(fakeExit, '#!/bin/sh\nsleep 0.3\nexit 3\n', 'utf8');
     chmodSync(fakeExit, 0o755);
 
     const api = createApi({

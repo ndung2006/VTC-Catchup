@@ -26,6 +26,8 @@ import {
 } from './auth.js';
 import { DEFAULT_RETENTION_DAYS, runGarbageCollector } from '../jobs/garbageCollector.js';
 import { TelegramNotifier, processAlertText } from '../jobs/notify.js';
+import { sendResetMail } from './mailer.js';
+import { logger } from '../core/logger.js';
 import { checkHlsHealth } from '../jobs/healthcheck.js';
 import { Exporter, ExportError } from '../exporter/exporter.js';
 import type { SourceConfig } from '../core/types.js';
@@ -137,8 +139,7 @@ export function createApi(opts: ApiOptions = {}): {
       renameSync(tmp, storeFile);
     } catch {
       // Ghi persist thất bại thì log, không chặn nghiệp vụ chính.
-      // eslint-disable-next-line no-console
-      console.warn(`[vtc-api][WARN] không ghi được ${storeFile}`);
+      logger.warn(`không ghi được ${storeFile}`);
     }
   }
   function loadPersisted(): string[] {
@@ -174,8 +175,7 @@ export function createApi(opts: ApiOptions = {}): {
       : new Exporter({ captureDir, exportsDir, tspBin: opts.tspBin, persist: persistEnabled });
   const jwtSecret = opts.jwtSecret ?? process.env['VTC_JWT_SECRET'] ?? 'dev-only-insecure-secret';
   if (process.env['VTC_JWT_SECRET'] === undefined && opts.jwtSecret === undefined) {
-    // eslint-disable-next-line no-console
-    console.warn('[vtc-api][WARN] dùng JWT secret mặc định — đặt VTC_JWT_SECRET ở Prod!');
+    logger.warn('dùng JWT secret mặc định — đặt VTC_JWT_SECRET ở Prod!');
   }
 
   // Đồng bộ trạng thái process → store (UI đọc 1 chỗ).
@@ -249,8 +249,7 @@ export function createApi(opts: ApiOptions = {}): {
       role: 'admin',
     });
     if (process.env['VTC_ADMIN_PASS'] === undefined && opts.adminPass === undefined) {
-      // eslint-disable-next-line no-console
-      console.warn('[vtc-api][WARN] dùng mật khẩu admin mặc định — đặt VTC_ADMIN_PASS ở Prod!');
+      logger.warn('dùng mật khẩu admin mặc định — đặt VTC_ADMIN_PASS ở Prod!');
     }
   }
 
@@ -329,9 +328,8 @@ export function createApi(opts: ApiOptions = {}): {
         if (user !== undefined) {
           const token = newResetToken();
           store.setResetToken(user.username, token, Date.now() + RESET_TTL_MS);
-          // Chưa có SMTP (Phase sau dùng Nodemailer) — in link ra log để dev/test.
-          // eslint-disable-next-line no-console
-          console.log(`[vtc-api] reset link cho ${user.email}: /reset-password?token=${token}`);
+          // Có SMTP thì gửi mail, chưa có thì log link (dev/test xem log).
+          await sendResetMail(user.email, token);
         }
         send(res, 200, { message: FORGOT_MSG });
         return;
@@ -405,6 +403,59 @@ export function createApi(opts: ApiOptions = {}): {
     // GET /api/admin/hls-health — playlist kênh nào stale
     if (seg[0] === 'api' && seg[1] === 'admin' && m === 'GET' && seg[2] === 'hls-health') {
       send(res, 200, await checkHlsHealth(liveDir));
+      return;
+    }
+    // GET /api/admin/notify-status — Telegram đã cấu hình chưa (không lộ secret)
+    if (seg[0] === 'api' && seg[1] === 'admin' && m === 'GET' && seg[2] === 'notify-status') {
+      send(res, 200, { configured: notifier.configured });
+      return;
+    }
+    // POST /api/admin/notify-test — bắn tin thử để trực ca xác nhận nhận được
+    if (seg[0] === 'api' && seg[1] === 'admin' && m === 'POST' && seg[2] === 'notify-test') {
+      const result = await notifier.alert(
+        'manual-test',
+        processAlertText('VẬN HÀNH', 'Tin kiểm tra cảnh báo từ trang Quản trị', 'Nếu nhận được tin này, kênh cảnh báo hoạt động.'),
+      );
+      send(res, 200, { result, configured: notifier.configured });
+      return;
+    }
+    // GET /api/admin/config-backup — tải toàn bộ cấu hình sources (JSON)
+    if (seg[0] === 'api' && seg[1] === 'admin' && m === 'GET' && seg[2] === 'config-backup') {
+      send(res, 200, { exportedAt: new Date().toISOString(), sources: store.listSources() });
+      return;
+    }
+    // POST /api/admin/config-restore {sources: SourceConfig[]} — phục hồi cấu hình
+    if (seg[0] === 'api' && seg[1] === 'admin' && m === 'POST' && seg[2] === 'config-restore') {
+      const b = (await readJson(req)) as { sources?: unknown };
+      if (!Array.isArray(b.sources)) return send(res, 400, { error: 'thiếu sources[]' });
+      const records: SourceConfig[] = [];
+      for (const s of b.sources) {
+        try {
+          const checked = checkSourceBody(s);
+          generateConfText(checked); // validate sinh conf được
+          records.push(checked);
+        } catch (e) {
+          if (e instanceof ConfigError) return send(res, 400, { error: `bản ghi lỗi: ${e.message}` });
+          if (e instanceof Error) return send(res, 400, { error: `bản ghi lỗi: ${e.message}` });
+          throw e;
+        }
+      }
+      try {
+        store.replaceAll(records);
+      } catch (e) {
+        if (e instanceof Error) return send(res, 400, { error: e.message });
+        throw e;
+      }
+      for (const r of records) {
+        try {
+          writeConfFile({ ...r, confRev: 1 }, confDir);
+        } catch {
+          // ghi conf lỗi thì Start sẽ báo — vẫn giữ record
+        }
+      }
+      savePersisted();
+      logger.info(`config-restore: phục hồi ${records.length} sources`);
+      send(res, 200, { ok: true, count: records.length });
       return;
     }
 
@@ -503,6 +554,7 @@ export function createApi(opts: ApiOptions = {}): {
         }
         const rec = store.createSource(body);
         savePersisted();
+        logger.info(`tạo source ${body.id} (${body.channels.length} kênh)`);
         send(res, 201, rec);
         return;
       }
@@ -524,6 +576,7 @@ export function createApi(opts: ApiOptions = {}): {
           }
           const updated = store.updateSource(id, patch);
           savePersisted();
+          logger.info(`sửa source ${id} (rev ${updated.confRev})`);
           send(res, 200, updated);
           return;
         }
@@ -536,6 +589,7 @@ export function createApi(opts: ApiOptions = {}): {
           }
           store.deleteSource(id);
           savePersisted();
+          logger.info(`xóa source ${id}`);
           send(res, 200, { ok: true });
           return;
         }
@@ -556,6 +610,7 @@ export function createApi(opts: ApiOptions = {}): {
         const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
         store.setStatus(id, 'RUNNING', pid);
         savePersisted();
+        logger.info(`start source ${id} (pid ${pid})`);
         send(res, 200, { ok: true, pid, conf: gen.content });
         return;
       }
@@ -570,6 +625,7 @@ export function createApi(opts: ApiOptions = {}): {
         }
         store.setStatus(id, 'STOPPED');
         savePersisted();
+        logger.info(`stop source ${id}`);
         send(res, 200, { ok: true });
         return;
       }
@@ -584,6 +640,7 @@ export function createApi(opts: ApiOptions = {}): {
         void seedAdmin().then(() => {
           // Nạp cấu hình đã persist (restart container không mất sources).
           const wasRunning = loadPersisted();
+          if (persistEnabled) logger.info(`nạp ${store.listSources().length} sources từ ${storeFile}`);
           if (autoStartEnabled) {
             for (const sid of wasRunning) {
               const r = store.getSource(sid);

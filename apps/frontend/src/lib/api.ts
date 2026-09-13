@@ -110,6 +110,25 @@ export const api = {
     fetch('/api/admin/hls-health', { credentials: 'include' }).then((r) =>
       json<{ channel: string; ageSec: number | null; stale: boolean }[]>(r),
     ),
+  notifyStatus: () =>
+    fetch('/api/admin/notify-status', { credentials: 'include' }).then((r) =>
+      json<{ configured: boolean }>(r),
+    ),
+  notifyTest: () =>
+    fetch('/api/admin/notify-test', { method: 'POST', credentials: 'include' }).then((r) =>
+      json<{ result: string; configured: boolean }>(r),
+    ),
+  configBackup: () =>
+    fetch('/api/admin/config-backup', { credentials: 'include' }).then((r) =>
+      json<{ exportedAt: string; sources: Source[] }>(r),
+    ),
+  configRestore: (sources: unknown[]) =>
+    fetch('/api/admin/config-restore', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sources }),
+    }).then((r) => json<{ ok: boolean; count: number }>(r)),
 };
 
 /** URL playlist HLS của 1 kênh (Nginx serve từ RAMDisk). */
