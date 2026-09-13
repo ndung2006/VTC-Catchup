@@ -11,7 +11,8 @@
 #   4. docker compose --profile prod up -d --build
 #
 # Backend chạy network_mode:host để tsp con kế thừa namespace và bắt
-# multicast trực tiếp từ switch (PRD §11). Đánh đổi: port 8080 chiếm trên host.
+# multicast trực tiếp từ switch (PRD §11). Đánh đổi: port 18080 chiếm trên host
+# (không dùng 8080 vì trùng dashboard Traefik khi chạy cùng Coolify).
 
 services:
   #-- Dev: vọc TSDuck CLI/plugin đúng cách ------------------------------------
@@ -62,7 +63,7 @@ services:
       - path: .env.prod
         required: false # thiếu thì dùng default dev (có WARN trong log)
     environment:
-      PORT: "8080"
+      PORT: "18080"
       VTC_GC_ENABLE: "1"
     volumes:
       - ramdisk:/media/ramdisk/live
@@ -81,7 +82,7 @@ services:
     container_name: vtc-frontend
     init: true
     environment:
-      VTC_API_ORIGIN: "http://host.docker.internal:8080"
+      VTC_API_ORIGIN: "http://host.docker.internal:18080"
     restart: unless-stopped
     profiles: ["prod"]
 

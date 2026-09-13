@@ -92,7 +92,7 @@ khi lên Phase 2b multi-node).
 | Port | Dịch vụ | Mở cho ai |
 |---|---|---|
 | 80 | Nginx (HLS + web + API) | Người dùng + kỹ thuật |
-| 8080 | Backend API trực tiếp | Chỉ nội bộ/LAN (debug), Prod đi qua Nginx |
+| 18080 | Backend API trực tiếp (host-network) | Chỉ nội bộ (FE gọi qua đây); tránh 8080 vì trùng dashboard Traefik |
 | 3000 | Frontend dev | Chỉ dev local |
 | UDP theo cấu hình | Multicast ingest (VD 1234) | Switch multicast, IGMP snooping bật |
 
@@ -135,7 +135,7 @@ sudo sh scripts/mount-ramdisk.sh
 cp .env.prod.example .env.prod       # điền JWT secret, admin pass mạnh, Telegram
 docker compose --profile prod up -d --build
 docker compose --profile prod -f docker-compose.yml -f compose.prod.yml up -d  # bind HDD thật
-curl http://127.0.0.1:8080/health    # backend ở host network → {"ok":true}
+curl http://127.0.0.1:18080/health   # backend ở host network → {"ok":true}
 # Web + HLS qua Nginx: http://<ip-may>/ (xem chi tiết trong 11-DEPLOY)
 ```
 

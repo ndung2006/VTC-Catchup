@@ -44,7 +44,9 @@ RUN npm ci
 COPY apps/backend/src ./src
 RUN ./node_modules/.bin/tsc -p tsconfig.json && npm prune --omit=dev
 
-ENV PORT=8080 \
+# PORT 18080 (không dùng 8080: trùng dashboard Traefik của Coolify trên host,
+# backend host-network bind trực tiếp cổng host nên phải tránh).
+ENV PORT=18080 \
     VTC_CONF_DIR=/opt/vtc/conf/sources \
     VTC_CAPTURE_DIR=/mnt/Data/catchup/captures \
     VTC_EXPORTS_DIR=/mnt/Data/catchup/exports \
@@ -52,6 +54,6 @@ ENV PORT=8080 \
     VTC_LOG_DIR=/app/storage/logs \
     VTC_GC_ENABLE=1
 
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)})" || exit 1
+EXPOSE 18080
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||18080)+'/health').then(r=>{if(!r.ok)process.exit(1)})" || exit 1
 CMD ["node", "dist/server.js"]
