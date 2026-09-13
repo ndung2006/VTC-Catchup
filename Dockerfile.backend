@@ -1,23 +1,18 @@
-# Backend Prod — Ubuntu 24.04 + TSDuck + Node 20 trong 1 image.
-# (Upstream chỉ còn binary TSDuck mới cho 24.04+; host Prod giữ 22.04 vẫn chạy
-#  container 24.04 bình thường.)
-# Lý do gộp: backend spawn `tsp` làm child process (kế thừa net namespace của
-# container) nên container backend cần network_mode:host để bắt multicast.
-# Tách image riêng (node:alpine) chỉ dùng được khi tsp chạy ngoài host.
+# Backend Prod — Ubuntu 24.04 + TSDuck + Node 20
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Ho_Chi_Minh \
     NODE_MAJOR=20
 
-# 1. TSDuck repo chính thức + NodeSource.
+# 1. Cài đặt TSDuck từ kho mặc định của Ubuntu (bỏ qua máy chủ tsduck.io đang lỗi) + Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg lsb-release procps wget \
+      tsduck tsduck-dev \
+    && mkdir -p /etc/apt/keyrings \
     && curl -fsSL --retry 5 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && wget -qO- https://download.tsduck.io/ubuntu/tsduck.asc | gpg --dearmor > /usr/share/keyrings/tsduck.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/tsduck.gpg] https://download.tsduck.io/ubuntu/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/tsduck.list \
-    && apt-get update && apt-get install -y --no-install-recommends tsduck nodejs \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && node --version && tsp --version
 
@@ -30,7 +25,7 @@ RUN mkdir -p /media/ramdisk/live \
 
 WORKDIR /app
 
-# 3. Build backend (tận dụng cache layer: deps trước, source sau).
+# 3. Build backend
 COPY apps/backend/package.json apps/backend/package-lock.json apps/backend/tsconfig.json ./
 RUN npm ci
 COPY apps/backend/src ./src
