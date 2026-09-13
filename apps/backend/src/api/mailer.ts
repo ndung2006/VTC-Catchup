@@ -30,6 +30,9 @@ export async function sendResetMail(email: string, token: string): Promise<MailR
       host: process.env['VTC_SMTP_HOST'],
       port: Number.isFinite(port) ? port : 587,
       secure: (process.env['VTC_SMTP_SECURE'] ?? '') === '1',
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 15_000,
       auth:
         process.env['VTC_SMTP_USER'] !== undefined
           ? { user: process.env['VTC_SMTP_USER'], pass: process.env['VTC_SMTP_PASS'] ?? '' }

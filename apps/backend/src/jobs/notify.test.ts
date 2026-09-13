@@ -36,6 +36,17 @@ describe('TelegramNotifier', () => {
     assert.equal(await n.alert('k', 'x'), 'error');
   });
 
+  it('fetch treo + timeout → error nhanh (không treo API)', async () => {
+    const hanging = ((_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise((_res, rej) => {
+        init?.signal?.addEventListener('abort', () => rej(new Error('aborted')));
+      })) as unknown as typeof fetch;
+    const n = new TelegramNotifier({ botToken: 'T', chatId: 'C', fetchFn: hanging, timeoutMs: 50 });
+    const t0 = Date.now();
+    assert.equal(await n.alert('k', 'x'), 'error');
+    assert.ok(Date.now() - t0 < 5000, 'phải timeout trong ~50ms, không treo');
+  });
+
   it('template tin đúng chuẩn filter', () => {
     const t = processAlertText('TS8', 'mất tín hiệu đầu vào');
     assert.match(t, /\[CẢNH BÁO\]\[TS8\] mất tín hiệu đầu vào/);

@@ -12,6 +12,8 @@ export interface NotifierOptions {
   chatId?: string;
   /** Ms giữa 2 tin cùng key (mặc định 5 phút). */
   cooldownMs?: number;
+  /** Timeout gọi Telegram API (mặc định 10s — chống treo request). */
+  timeoutMs?: number;
   /** Inject fetch mock cho test. */
   fetchFn?: typeof fetch;
 }
@@ -21,6 +23,7 @@ const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 export class TelegramNotifier {
   private readonly lastSent = new Map<string, number>();
   private readonly cooldownMs: number;
+  private readonly timeoutMs: number;
   private readonly botToken: string;
   private readonly chatId: string;
   private readonly fetchFn: typeof fetch;
@@ -29,6 +32,7 @@ export class TelegramNotifier {
     this.botToken = opts.botToken ?? process.env['VTC_TELEGRAM_BOT_TOKEN'] ?? '';
     this.chatId = opts.chatId ?? process.env['VTC_TELEGRAM_CHAT_ID'] ?? '';
     this.cooldownMs = opts.cooldownMs ?? DEFAULT_COOLDOWN_MS;
+    this.timeoutMs = opts.timeoutMs ?? 10_000;
     this.fetchFn = opts.fetchFn ?? fetch;
   }
 
@@ -50,10 +54,12 @@ export class TelegramNotifier {
       return 'logged';
     }
     try {
+      // Timeout: mạng ra Telegram chập chờn không được treo request API.
       const r = await this.fetchFn(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ chat_id: this.chatId, text }),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (!r.ok) return 'error';
       this.lastSent.set(key, now);

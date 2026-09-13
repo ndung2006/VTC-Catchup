@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 
 export default function AdminPage(): React.JSX.Element {
   const [tgConfigured, setTgConfigured] = useState<boolean | null>(null);
+  const [statusErr, setStatusErr] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -15,8 +16,10 @@ export default function AdminPage(): React.JSX.Element {
     try {
       const s = await api.notifyStatus();
       setTgConfigured(s.configured);
-    } catch {
+      setStatusErr('');
+    } catch (err) {
       setTgConfigured(null);
+      setStatusErr(err instanceof Error ? err.message : 'Không gọi được API');
     }
   };
 
@@ -26,7 +29,7 @@ export default function AdminPage(): React.JSX.Element {
 
   const testNotify = async (): Promise<void> => {
     setBusy(true);
-    setMsg('');
+    setMsg('Đang gửi tin thử…');
     try {
       const r = await api.notifyTest();
       if (r.configured) {
@@ -82,18 +85,27 @@ export default function AdminPage(): React.JSX.Element {
             <h2 className="mb-2 font-semibold">Kênh cảnh báo Telegram</h2>
             <p className="text-sm text-slate-600">
               Trạng thái:{' '}
-              {tgConfigured === null
-                ? '—'
-                : tgConfigured
-                  ? 'Đã cấu hình (crash/CC-error/HLS stale sẽ bắn về nhóm trực)'
-                  : 'Chưa cấu hình — cảnh báo đang ghi ra log file'}
+              {tgConfigured === null ? (
+                statusErr === '' ? (
+                  'Đang kiểm tra…'
+                ) : (
+                  <span className="text-red-600">
+                    Không gọi được API backend ({statusErr}) — kiểm tra Backend còn Running và biến
+                    VTC_API_ORIGIN của Frontend.
+                  </span>
+                )
+              ) : tgConfigured ? (
+                'Đã cấu hình (crash/CC-error/HLS stale sẽ bắn về nhóm trực)'
+              ) : (
+                'Chưa cấu hình — cảnh báo đang ghi ra log file'
+              )}
             </p>
             <button
-              onClick={testNotify}
+              onClick={() => void testNotify()}
               disabled={busy}
               className="mt-2 rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
             >
-              Bắn tin thử
+              {busy ? 'Đang gửi…' : 'Bắn tin thử'}
             </button>
           </div>
 
