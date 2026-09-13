@@ -1,24 +1,33 @@
-# Backend Prod — Ubuntu 24.04 + TSDuck + Node 20
+# Backend Prod — Ubuntu 24.04 + TSDuck (Compiled from source) + Node 20
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Ho_Chi_Minh \
     NODE_MAJOR=20
 
-# 1. Cài đặt Node.js và các công cụ cần thiết. Tải TSDuck (bản Debian 12 Bookworm) trực tiếp bằng wget.
+# 1. Cài đặt các gói phụ thuộc để Build TSDuck và Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg lsb-release procps wget libedit2 libpcsclite1 libsrt1.5-openssl libusb-1.0-0 \
+      ca-certificates curl gnupg lsb-release procps wget git build-essential \
+      dos2unix coreutils findutils diffutils grep sed gawk \
+      libedit-dev libpcsclite-dev libusb-1.0-0-dev \
+      libcurl4-openssl-dev libssl-dev zlib1g-dev \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL --retry 5 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
-    && wget -qO tsduck.deb http://ftp.us.debian.org/debian/pool/main/t/tsduck/tsduck_3.33-3139-1_amd64.deb \
-    && wget -qO tsduck-dev.deb http://ftp.us.debian.org/debian/pool/main/t/tsduck/tsduck-dev_3.33-3139-1_amd64.deb \
-    && apt-get install -y --no-install-recommends ./tsduck.deb ./tsduck-dev.deb \
-    && rm -rf /var/lib/apt/lists/* tsduck.deb tsduck-dev.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Biên dịch TSDuck từ mã nguồn Github (Phiên bản v3.39 mới và ổn định, Build mất khoảng ~3 phút)
+# Chúng ta sẽ build phiên bản không có SRT/RIST/VATEK để tiến trình diễn ra nhanh chóng nhất và giảm thiểu phụ thuộc thư viện.
+WORKDIR /tmp
+RUN git clone --branch v3.39-3956 --depth 1 https://github.com/tsduck/tsduck.git \
+    && cd tsduck \
+    && make -j$(nproc) NOTEST=1 NOPCSC=1 NOVATEK=1 NOSRT=1 NORIST=1 \
+    && make install \
+    && cd /tmp && rm -rf tsduck \
     && node --version && tsp --version
 
-# 2. Thư mục chuẩn VTC (trùng path trong code).
+# 3. Thư mục chuẩn VTC (trùng path trong code).
 RUN mkdir -p /media/ramdisk/live \
              /mnt/Data/catchup/captures \
              /mnt/Data/catchup/exports \
@@ -27,7 +36,7 @@ RUN mkdir -p /media/ramdisk/live \
 
 WORKDIR /app
 
-# 3. Build backend
+# 4. Build backend
 COPY apps/backend/package.json apps/backend/package-lock.json apps/backend/tsconfig.json ./
 RUN npm ci
 COPY apps/backend/src ./src
