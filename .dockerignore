@@ -6,6 +6,7 @@
 **/*.log
 storage/
 scripts/
-plugins/
+plugins/*
+!plugins/vtcmonitor/
 docs/
 .git/

@@ -1,32 +1,38 @@
-# Backend Prod — Ubuntu 24.04 + TSDuck (Compiled from source) + Node 20
+# Backend Prod — Ubuntu 24.04 + TSDuck .deb ghim version + Node 20
+#
+# TSDuck cài từ gói .deb chính thức (github releases), KHÔNG build từ nguồn:
+# build mất ~8 phút và byte nhị phân mỗi lần build có thể lệch; .deb ghim
+# version là cách chắc chắn hai máy chạy cùng byte (học từ VTC-SI).
+# Cùng version với VTC-SI: 3.44-4676 — một TSDuck cho cả hai hệ.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Ho_Chi_Minh \
     NODE_MAJOR=20
 
-# 1. Cài đặt các gói phụ thuộc để Build TSDuck và Node.js
+ARG TSDUCK_VERSION=3.44-4676
+ARG TSDUCK_DIST=ubuntu24
+ARG TARGETARCH=amd64
+
+# 1. Node.js 20 + TSDuck (main + dev) + toolchain build plugin custom.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg lsb-release procps wget git build-essential \
-      dos2unix coreutils findutils diffutils grep sed gawk \
-      libedit-dev libpcsclite-dev libusb-1.0-0-dev \
-      libcurl4-openssl-dev libssl-dev zlib1g-dev \
+      ca-certificates curl gnupg procps g++ make \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL --retry 5 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && curl -fsSL --retry 5 -o /tmp/tsduck.deb \
+         "https://github.com/tsduck/tsduck/releases/download/v${TSDUCK_VERSION}/tsduck_${TSDUCK_VERSION}.${TSDUCK_DIST}_${TARGETARCH}.deb" \
+    && curl -fsSL --retry 5 -o /tmp/tsduck-dev.deb \
+         "https://github.com/tsduck/tsduck/releases/download/v${TSDUCK_VERSION}/tsduck-dev_${TSDUCK_VERSION}.${TSDUCK_DIST}_${TARGETARCH}.deb" \
+    && apt-get update && apt-get install -y --no-install-recommends /tmp/tsduck.deb /tmp/tsduck-dev.deb \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/tsduck.deb /tmp/tsduck-dev.deb
 
-# 2. Biên dịch TSDuck từ mã nguồn Github (Chặn tuyệt đối việc tạo HTML Docs để tránh lỗi Asciidoctor)
-WORKDIR /tmp
-RUN git clone --branch v3.39-3956 --depth 1 https://github.com/tsduck/tsduck.git \
-    && cd tsduck \
-    && sed -i 's/docs-html//g' Makefile \
-    && sed -i 's/docs-pdf//g' Makefile \
-    && make -j$(nproc) NOTEST=1 NODOC=1 \
-    && make install-tools NODOC=1 \
-    && cd /tmp && rm -rf tsduck \
-    && node --version && tsp --version
+# 2. Build + cài plugin vtcmonitor custom (mọi conf Prod đều có `-P vtcmonitor`,
+# thiếu nó tsp crash ngay khi Start — bản Dockerfile cũ quên bước này).
+COPY plugins/vtcmonitor /tmp/vtcmonitor
+RUN cd /tmp/vtcmonitor && make && make install && rm -rf /tmp/vtcmonitor \
+    && node --version && tsp --version && tsp -P vtcmonitor --help >/dev/null
 
 # 3. Thư mục chuẩn VTC (trùng path trong code).
 RUN mkdir -p /media/ramdisk/live \

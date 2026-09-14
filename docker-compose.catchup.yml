@@ -1,0 +1,50 @@
+# VTCCatchup backend — chạy NGOÀI Coolify (plain docker compose + systemd).
+#
+# Vì sao file riêng (không dùng docker-compose.yml + compose.prod.yml cũ):
+# backend là mặt bắt tín hiệu 24/7, bắt buộc network_mode: host để tsp thấy
+# card vật lý + multicast; Coolify đè network, đổi IP container mỗi deploy và
+# nút Redeploy lúc nào cũng chực chớp nguồn. Frontend Next.js cứ để trong
+# Coolify (stateless, hợp bridge), trỏ VTC_API_ORIGIN về gateway mạng coolify.
+#
+# Dùng:
+#   cp .env.prod.example .env.prod   # điền secret (file này ngoài git)
+#   docker compose -f docker-compose.catchup.yml build backend
+#   docker compose -f docker-compose.catchup.yml up -d backend
+#
+# Điều kiện trước (xem docs/13-ROI-COOLIFY.md): tmpfs /media/ramdisk/live đã
+# mount, tuyến multicast 239.x đã ghim netplan, .env.prod đã điền.
+
+name: vtccatchup
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: vtccatchup-backend:local
+    container_name: vtccatchup-backend
+    # Multicast KHÔNG đi qua bridge: NAT không xử lý multicast và
+    # --local-address trong bridge chỉ thấy veth, không thấy card thật.
+    network_mode: host
+    env_file:
+      - path: .env.prod
+        required: false # thiếu thì dùng default dev (có WARN trong log)
+    environment:
+      PORT: "18080" # trùng dashboard Traefik :8080 thì đổi, nhưng phải cùng
+      VTC_GC_ENABLE: "1"
+    volumes:
+      # RAMDisk live (host mount tmpfs trước) + HDD catchup + conf + log.
+      # Đường dẫn host PHẢI tồn tại trước khi up (xem docs/13-ROI-COOLIFY.md).
+      - /media/ramdisk/live:/media/ramdisk/live
+      - /mnt/Data/catchup/captures:/mnt/Data/catchup/captures
+      - /mnt/Data/catchup/exports:/mnt/Data/catchup/exports
+      - /opt/vtc/conf/sources:/opt/vtc/conf/sources
+      - /var/log/vtccatchup:/app/storage/logs
+    # KHÔNG đặt CPU quota: throttle cgroup chèn khoảng lặng vào luồng TS,
+    # watchdog/CC-error sẽ đọc thành "mất nguồn". Giới hạn RAM thì vô hại.
+    mem_limit: 2g
+    stop_grace_period: 15s # cho tsp SIGTERM dọn file HLS đang ghi
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
