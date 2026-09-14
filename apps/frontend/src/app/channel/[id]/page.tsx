@@ -23,7 +23,7 @@ export default function ChannelPage({ params }: { params: { id: string } }): Rea
     try {
       const [ss, tok] = await Promise.all([
         api.sources(),
-        api.hlsToken(name, 120).catch(() => null),
+        api.hlsToken(name, 240).catch(() => null),
       ]);
       setFound(ss.some((s) => s.channels.some((c) => c.name === name)));
       if (tok === null) {
@@ -64,7 +64,7 @@ export default function ChannelPage({ params }: { params: { id: string } }): Rea
             {link !== '' && <CopyButton text={link} />}
           </div>
           <p className="text-xs text-slate-500">
-            Link có hạn dùng 2 giờ — hết hạn thì trình phát tự cấp lại, link đã copy đi thì hết hiệu lực.
+            Link có hạn dùng 4 giờ — hết hạn thì trình phát tự cấp lại, link đã copy đi thì hết hiệu lực.
           </p>
           {linkErr !== '' && <p className="text-sm text-red-600">{linkErr}</p>}
           {found === false && (
