@@ -110,6 +110,13 @@ export const api = {
     fetch('/api/admin/hls-health', { credentials: 'include' }).then((r) =>
       json<{ channel: string; ageSec: number | null; stale: boolean }[]>(r),
     ),
+  hlsToken: (channel: string, ttlMinutes = 120) =>
+    fetch('/api/hls-tokens', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel, ttlMinutes }),
+    }).then((r) => json<{ token: string; exp: number; url: string }>(r)),
   notifyStatus: () =>
     fetch('/api/admin/notify-status', { credentials: 'include' }).then((r) =>
       json<{ configured: boolean }>(r),

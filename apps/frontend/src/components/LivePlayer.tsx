@@ -11,7 +11,14 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 
-export function LivePlayer({ streamUrl }: { streamUrl: string }): React.JSX.Element {
+export function LivePlayer({
+  streamUrl,
+  onFatal,
+}: {
+  streamUrl: string;
+  /** Gọi khi lỗi fatal (VD token hết hạn) để trang cha cấp link mới. */
+  onFatal?: () => void;
+}): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(true);
   const [muted, setMuted] = useState(true); // autoplay chỉ được khi mute
@@ -29,8 +36,12 @@ export function LivePlayer({ streamUrl }: { streamUrl: string }): React.JSX.Elem
       void video.play().catch(() => setPlaying(false));
     } else if (Hls.isSupported()) {
       hls = new Hls({ maxBufferLength: 15 }); // buffer ngắn cho live trễ thấp
+      const fatalCb = onFatal;
       hls.on(Hls.Events.ERROR, (_ev, data) => {
-        if (data.fatal) setError(`HLS lỗi: ${data.type}/${data.details}`);
+        if (!data.fatal) return;
+        // Token hết hạn (403 segment) cũng là fatal — để trang cha cấp link mới.
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) fatalCb?.();
+        setError(`HLS lỗi: ${data.type}/${data.details}`);
       });
       // Chỉ play khi đã có manifest — play sớm hơn dễ báo lỗi giả + sai nút.
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -49,7 +60,7 @@ export function LivePlayer({ streamUrl }: { streamUrl: string }): React.JSX.Elem
       video.removeAttribute('src');
       video.load(); // ép browser nhả buffer chunk .ts cũ
     };
-  }, [streamUrl]);
+  }, [streamUrl, onFatal]);
 
   const togglePlay = (): void => {
     const v = videoRef.current;

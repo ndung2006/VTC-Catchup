@@ -26,6 +26,7 @@ import {
 } from './auth.js';
 import { DEFAULT_RETENTION_DAYS, runGarbageCollector } from '../jobs/garbageCollector.js';
 import { TelegramNotifier, processAlertText } from '../jobs/notify.js';
+import { clampHlsTtl, signHlsToken } from './hlsToken.js';
 import { sendResetMail } from './mailer.js';
 import { logger } from '../core/logger.js';
 import { checkHlsHealth } from '../jobs/healthcheck.js';
@@ -482,6 +483,20 @@ export function createApi(opts: ApiOptions = {}): {
       savePersisted();
       logger.info(`config-restore: phục hồi ${records.length} sources`);
       send(res, 200, { ok: true, count: records.length });
+      return;
+    }
+
+    // POST /api/hls-tokens {channel, ttlMinutes?} — cấp link xem có hạn dùng
+    // (đã qua gate JWT). Trả path kèm token+exp; trình phát/VLC dùng tới exp.
+    if (seg[0] === 'api' && seg[1] === 'hls-tokens' && seg.length === 2 && m === 'POST') {
+      const b = (await readJson(req)) as { channel?: unknown; ttlMinutes?: unknown };
+      const channel = typeof b.channel === 'string' ? b.channel : '';
+      const known = store.listSources().some((s) => s.channels.some((c) => c.name === channel));
+      if (!known) return send(res, 404, { error: `Kênh ${channel} không tồn tại` });
+      const exp = Date.now() + clampHlsTtl(b.ttlMinutes) * 60_000;
+      const token = signHlsToken(channel, exp);
+      const enc = encodeURIComponent(channel);
+      send(res, 200, { token, exp, url: `/hls/${enc}/index.m3u8?token=${token}&exp=${exp}` });
       return;
     }
 

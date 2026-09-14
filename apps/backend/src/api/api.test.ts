@@ -385,6 +385,34 @@ describe('API', { concurrency: false }, () => {
     }
   });
 
+  it('hls-tokens: 401 khi chưa login, 404 kênh lạ, 200 + clamp TTL', async () => {
+    const noAuth = await fetch(`${base}/api/hls-tokens`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'demo4' }),
+    });
+    assert.equal(noAuth.status, 401);
+
+    let r = await req('/api/hls-tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'khong-co-kenh-nay' }),
+    });
+    assert.equal(r.status, 404);
+
+    r = await req('/api/hls-tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'demo4', ttlMinutes: 100000 }),
+    });
+    assert.equal(r.status, 200);
+    const j = (await r.json()) as { token: string; exp: number; url: string };
+    assert.match(j.token, /^[0-9a-f]{64}$/);
+    const ttlMin = Math.round((j.exp - Date.now()) / 60000);
+    assert.ok(ttlMin <= 1440 && ttlMin >= 1430, `TTL phải kẹp 1440, được ${ttlMin}`);
+    assert.match(j.url, /^\/hls\/demo4\/index\.m3u8\?token=[0-9a-f]{64}&exp=\d+$/);
+  });
+
   it('SSE cần auth + trả event', async () => {
     const noAuth = await fetch(`${base}/api/system/stream`);
     assert.equal(noAuth.status, 401);
