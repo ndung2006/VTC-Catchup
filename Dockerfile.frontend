@@ -22,5 +22,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 USER nextjs
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1
+# Healthcheck theo đúng PORT runtime (Coolify có thể đặt 3000/8067/..., Next.js
+# nghe theo process.env.PORT nên check cứng 1 cổng là tự sát như vừa gặp).
+HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:${PORT:-3000}/login >/dev/null || exit 1
 CMD ["node", "server.js"]
