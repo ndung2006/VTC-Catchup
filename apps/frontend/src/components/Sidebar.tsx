@@ -47,6 +47,9 @@ export function Sidebar(): React.JSX.Element {
         <Link href="/sources" className="block rounded px-2 py-1.5 hover:bg-slate-800">
           Nguồn
         </Link>
+        <Link href="/channels" className="block rounded px-2 py-1.5 hover:bg-slate-800">
+          Kênh
+        </Link>
         <Link href="/exports" className="block rounded px-2 py-1.5 hover:bg-slate-800">
           Trích xuất
         </Link>

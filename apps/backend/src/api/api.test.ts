@@ -348,6 +348,43 @@ describe('API', { concurrency: false }, () => {
     assert.equal(r.status, 400);
   });
 
+  it('tên kênh trùng (trong/cross-source) → 400, tên lạ → 201', async () => {
+    const post = (id: string, channels: unknown): Promise<Response> =>
+      req('/api/sources', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, input: 'file /tmp/x.ts', recordAll: true, channels }),
+      });
+    // API1 đã có kênh demo4/demo5 (đã restore ở test backup trước đó).
+    let r = await post('DUP1', [{ name: 'demo4', serviceId: 40, isLive: true }]);
+    assert.equal(r.status, 400);
+    assert.match(((await r.json()) as { error: string }).error, /trùng/);
+
+    r = await post('DUP2', [
+      { name: 'kenhmoi', serviceId: 41, isLive: true },
+      { name: 'kenhmoi', serviceId: 42, isLive: true },
+    ]);
+    assert.equal(r.status, 400);
+
+    // PUT gây trùng với nguồn khác cũng 400.
+    r = await post('TMPOK', [{ name: 'tamok', serviceId: 43, isLive: true }]);
+    assert.equal(r.status, 201);
+    r = await req('/api/sources/API1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channels: [{ name: 'tamok', serviceId: 4, isLive: true }] }),
+    });
+    assert.equal(r.status, 400);
+
+    // Tên duy nhất thì qua, rồi dọn.
+    r = await post('UNIQ1', [{ name: 'kenhdocnhat', serviceId: 44, isLive: true }]);
+    assert.equal(r.status, 201);
+    for (const id of ['TMPOK', 'UNIQ1']) {
+      const d = await req(`/api/sources/${id}`, { method: 'DELETE' });
+      assert.equal(d.status, 200);
+    }
+  });
+
   it('SSE cần auth + trả event', async () => {
     const noAuth = await fetch(`${base}/api/system/stream`);
     assert.equal(noAuth.status, 401);

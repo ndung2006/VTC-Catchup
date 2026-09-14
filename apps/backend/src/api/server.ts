@@ -95,6 +95,30 @@ function checkSourceBody(b: unknown): SourceConfig {
   return o as SourceConfig;
 }
 
+/**
+ * Tên kênh phải duy nhất toàn hệ thống: thư mục HLS live là
+ * `<LIVE_BASE>/<channelName>` — trùng tên là hai nguồn đè playlist của nhau.
+ * Trả về câu lỗi hoặc null.
+ */
+function duplicateChannelName(all: SourceConfig[]): string | null {
+  const seen = new Map<string, string>();
+  for (const s of all) {
+    if (!Array.isArray(s.channels)) continue;
+    for (const c of s.channels) {
+      const name = (c as { name?: unknown }).name;
+      if (typeof name !== 'string' || name === '') continue;
+      const prev = seen.get(name);
+      if (prev !== undefined) {
+        return prev === s.id
+          ? `tên kênh "${name}" bị trùng trong cùng nguồn ${s.id} (thư mục HLS sẽ đè nhau)`
+          : `tên kênh "${name}" bị trùng giữa ${prev} và ${s.id} (thư mục HLS sẽ đè nhau)`;
+      }
+      seen.set(name, s.id);
+    }
+  }
+  return null;
+}
+
 /** ISO string hoặc epoch ms → epoch ms (NaN nếu không parse được). */
 function toMs(v: unknown): number {
   if (typeof v === 'number') return v;
@@ -440,6 +464,8 @@ export function createApi(opts: ApiOptions = {}): {
           throw e;
         }
       }
+      const dup = duplicateChannelName(records);
+      if (dup !== null) return send(res, 400, { error: dup });
       try {
         store.replaceAll(records);
       } catch (e) {
@@ -552,6 +578,8 @@ export function createApi(opts: ApiOptions = {}): {
           if (e instanceof ConfigError) return send(res, 400, { error: e.message });
           throw e;
         }
+        const dup = duplicateChannelName([...store.listSources(), body]);
+        if (dup !== null) return send(res, 400, { error: dup });
         const rec = store.createSource(body);
         savePersisted();
         logger.info(`tạo source ${body.id} (${body.channels.length} kênh)`);
@@ -568,12 +596,15 @@ export function createApi(opts: ApiOptions = {}): {
           const cur = store.getSource(id);
           if (cur === undefined) return send(res, 404, { error: `Source ${id} không tồn tại` });
           const patch = (await readJson(req)) as Partial<SourceConfig>;
+          const merged = { ...cur, ...patch, id: cur.id };
           try {
-            generateConfText({ ...cur, ...patch, id: cur.id });
+            generateConfText(merged);
           } catch (e) {
             if (e instanceof ConfigError) return send(res, 400, { error: e.message });
             throw e;
           }
+          const dup = duplicateChannelName(store.listSources().map((s) => (s.id === id ? merged : s)));
+          if (dup !== null) return send(res, 400, { error: dup });
           const updated = store.updateSource(id, patch);
           savePersisted();
           logger.info(`sửa source ${id} (rev ${updated.confRev})`);

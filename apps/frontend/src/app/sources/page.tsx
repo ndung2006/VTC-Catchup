@@ -111,6 +111,20 @@ export default function SourcesPage(): React.JSX.Element {
       setMsg('Cần ít nhất 1 kênh.');
       return null;
     }
+    const names = channels.map((c) => c.name);
+    const dupInForm = names.find((n, i) => names.indexOf(n) !== i);
+    if (dupInForm !== undefined) {
+      setMsg(`Tên kênh "${dupInForm}" bị trùng trong form (thư mục HLS sẽ đè nhau).`);
+      return null;
+    }
+    const clash = sources.find(
+      (s) => (editingId === null || s.id !== editingId) && s.channels.some((c) => names.includes(c.name)),
+    );
+    if (clash !== undefined) {
+      const bad = channels.find((c) => clash.channels.some((x) => x.name === c.name))?.name ?? '';
+      setMsg(`Tên kênh "${bad}" đã có ở nguồn ${clash.id} — tên kênh phải duy nhất toàn hệ thống.`);
+      return null;
+    }
     const liveCount = channels.filter((c) => c.isLive).length;
     if (liveCount === 0 && !fRecordAll) {
       setMsg('Cấu hình vô nghĩa: 0 kênh live + không ghi catchup (recordAll=false). Hãy bật ít nhất 1 kênh live hoặc bật ghi catchup.');
