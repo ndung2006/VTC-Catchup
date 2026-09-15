@@ -117,6 +117,21 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ channel, ttlMinutes }),
     }).then((r) => json<{ token: string; exp: number; url: string }>(r)),
+  pullToken: (channel: string) =>
+    fetch('/api/pull-tokens', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    }).then((r) => json<{ channel: string; pull: string; url: string }>(r)),
+  publicChannels: () =>
+    fetch('/api/public/channels', { credentials: 'include' }).then((r) =>
+      json<{
+        generatedAt: string;
+        baseUrl: string;
+        channels: { name: string; serviceId: number; sourceId: string; status: string; live: boolean; hls: string }[];
+      }>(r),
+    ),
   notifyStatus: () =>
     fetch('/api/admin/notify-status', { credentials: 'include' }).then((r) =>
       json<{ configured: boolean }>(r),

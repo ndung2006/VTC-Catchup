@@ -39,3 +39,57 @@ export function clampHlsTtl(ttlMinutes: unknown): number {
   if (!Number.isFinite(v)) return 120;
   return Math.min(MAX_HLS_TTL_MIN, Math.max(MIN_HLS_TTL_MIN, v));
 }
+
+//-- Link kéo luồng cho đối tác (VTVgo): không hết hạn, gắn theo kênh --------
+
+/** Ký pull token cho 1 kênh (sống tới khi đổi secret). */
+export function signPullToken(channel: string, secret: string = hlsSecret()): string {
+  return createHmac('sha256', secret).update(`pull:${channel}`, 'utf8').digest('hex');
+}
+
+export function verifyPullToken(channel: string, token: string, secret: string = hlsSecret()): boolean {
+  if (!channelOk(channel)) return false;
+  if (!/^[0-9a-f]{64}$/.test(token)) return false;
+  const expect = signPullToken(channel, secret);
+  const a = Buffer.from(token, 'utf8');
+  const b = Buffer.from(expect, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+//-- Khóa API cho máy-gọi-máy (Bearer) ---------------------------------------
+
+export interface PartnerKey {
+  name: string;
+  key: string;
+}
+
+/**
+ * VTC_PARTNER_KEYS="vtvgo:KEY1,giamsat:KEY2" (hoặc key trần cách nhau phẩy).
+ * Đọc env mỗi lần gọi để test/đổi không cần restart logic.
+ */
+export function partnerKeys(): PartnerKey[] {
+  const raw = process.env['VTC_PARTNER_KEYS'] ?? '';
+  const out: PartnerKey[] = [];
+  for (const part of raw.split(',')) {
+    const t = part.trim();
+    if (t === '') continue;
+    const i = t.indexOf(':');
+    if (i > 0) out.push({ name: t.slice(0, i).trim() || 'partner', key: t.slice(i + 1).trim() });
+    else out.push({ name: 'partner', key: t });
+  }
+  return out.filter((p) => p.key !== '');
+}
+
+/** Header "Authorization: Bearer <key>" hợp lệ → tên đối tác, else null. */
+export function verifyPartnerKey(authHeader: unknown): string | null {
+  if (typeof authHeader !== 'string') return null;
+  const m = /^Bearer (.+)$/.exec(authHeader.trim());
+  if (m === null) return null;
+  const give = m[1] ?? '';
+  for (const p of partnerKeys()) {
+    const a = Buffer.from(give, 'utf8');
+    const b = Buffer.from(p.key, 'utf8');
+    if (a.length === b.length && timingSafeEqual(a, b)) return p.name;
+  }
+  return null;
+}

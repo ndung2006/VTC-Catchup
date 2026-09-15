@@ -26,7 +26,7 @@ import {
 } from './auth.js';
 import { DEFAULT_RETENTION_DAYS, runGarbageCollector } from '../jobs/garbageCollector.js';
 import { TelegramNotifier, processAlertText } from '../jobs/notify.js';
-import { clampHlsTtl, signHlsToken } from './hlsToken.js';
+import { clampHlsTtl, signHlsToken, signPullToken, verifyPartnerKey } from './hlsToken.js';
 import { sendResetMail } from './mailer.js';
 import { logger } from '../core/logger.js';
 import { checkHlsHealth } from '../jobs/healthcheck.js';
@@ -131,17 +131,22 @@ function toMs(v: unknown): number {
 }
 
 /**
- * verifyAuth: đọc JWT từ HttpOnly Cookie, trả username hoặc null.
+ * verifyAuth: JWT trong HttpOnly Cookie, HOẶC Bearer partner key
+ * (VTC_PARTNER_KEYS, cho máy-gọi-máy như VTVgo — full quyền, giữ kín như pass).
  * Gắn trước mọi API nghiệp vụ — chặn spawn/chạm đĩa khi 401.
  */function makeRequireAuth(jwtSecret: string) {
   return (req: IncomingMessage): string | null => {
     const token = parseCookies(req.headers.cookie)[JWT_COOKIE];
-    if (token === undefined) return null;
-    try {
-      return verifyToken(token, jwtSecret).sub;
-    } catch {
-      return null; // sai chữ ký / hết hạn / sai format
+    if (token !== undefined) {
+      try {
+        return verifyToken(token, jwtSecret).sub;
+      } catch {
+        // cookie hỏng thì thử Bearer tiếp thay vì rớt ngay
+      }
     }
+    const partner = verifyPartnerKey(req.headers.authorization);
+    if (partner !== null) return `partner:${partner}`;
+    return null;
   };
 }
 
@@ -512,6 +517,41 @@ export function createApi(opts: ApiOptions = {}): {
       const token = signHlsToken(channel, exp);
       const enc = encodeURIComponent(channel);
       send(res, 200, { token, exp, url: `/hls/${enc}/index.m3u8?token=${token}&exp=${exp}` });
+      return;
+    }
+
+    // POST /api/pull-tokens {channel} — link kéo luồng KHÔNG hết hạn cho đối
+    // tác (VTVgo lưu URL 1 lần, play mãi tới khi đổi secret). Kênh phải tồn tại.
+    if (seg[0] === 'api' && seg[1] === 'pull-tokens' && seg.length === 2 && m === 'POST') {
+      const b = (await readJson(req)) as { channel?: unknown };
+      const channel = typeof b.channel === 'string' ? b.channel : '';
+      const known = store.listSources().some((s) => s.channels.some((c) => c.name === channel));
+      if (!known) return send(res, 404, { error: `Kênh ${channel} không tồn tại` });
+      const pull = signPullToken(channel);
+      const enc = encodeURIComponent(channel);
+      send(res, 200, { channel, pull, url: `/hls/${enc}/index.m3u8?pull=${pull}` });
+      return;
+    }
+
+    // GET /api/public/channels — danh mục kênh cho đối tác kéo luồng (Bearer).
+    // Schema ổn định cho máy đọc: thêm field không xóa field.
+    if (seg[0] === 'api' && seg[1] === 'public' && seg[2] === 'channels' && seg.length === 3 && m === 'GET') {
+      const base = (process.env['VTC_PUBLIC_BASE_URL'] ?? '').replace(/\/$/, '');
+      const channels = store.listSources().flatMap((s) =>
+        s.channels.map((c) => {
+          const pull = signPullToken(c.name);
+          const path = `/hls/${encodeURIComponent(c.name)}/index.m3u8?pull=${pull}`;
+          return {
+            name: c.name,
+            serviceId: c.serviceId,
+            sourceId: s.id,
+            status: s.status,
+            live: c.isLive,
+            hls: base === '' ? path : `${base}${path}`,
+          };
+        }),
+      );
+      send(res, 200, { generatedAt: new Date().toISOString(), baseUrl: base, channels });
       return;
     }
 

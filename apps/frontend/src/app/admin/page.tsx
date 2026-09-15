@@ -11,6 +11,7 @@ export default function AdminPage(): React.JSX.Element {
   const [statusErr, setStatusErr] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pubPreview, setPubPreview] = useState('');
 
   const loadStatus = async (): Promise<void> => {
     try {
@@ -107,6 +108,40 @@ export default function AdminPage(): React.JSX.Element {
             >
               {busy ? 'Đang gửi…' : 'Bắn tin thử'}
             </button>
+          </div>
+
+          <div className="rounded-xl bg-white p-4 shadow">
+            <h2 className="mb-2 font-semibold">Tích hợp VTVgo (đối tác kéo luồng)</h2>
+            <p className="text-sm text-slate-600">
+              Danh mục kênh máy đọc ở <code className="font-mono">/api/public/channels</code>, xác thực bằng
+              header <code className="font-mono">Authorization: Bearer &lt;key&gt;</code> (key trong
+              VTC_PARTNER_KEYS ở backend). Link kéo luồng từng kênh tạo ở trang Kênh (nút Link kéo).
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <code className="flex-1 break-all rounded bg-slate-100 px-3 py-2 font-mono text-xs text-slate-600">
+                {typeof window === 'undefined' ? '' : `${window.location.origin}/api/public/channels`}
+              </code>
+              <button
+                onClick={() => {
+                  setMsg('');
+                  api
+                    .publicChannels()
+                    .then((j) =>
+                      setPubPreview(
+                        `${j.channels.length} kênh: ${j.channels.map((c) => c.name).join(', ') || '—'}`,
+                      ),
+                    )
+                    .catch((err: unknown) => setMsg(err instanceof Error ? err.message : 'Xem trước thất bại'));
+                }}
+                className="rounded bg-slate-200 px-4 py-2 text-sm"
+              >
+                Xem trước danh mục
+              </button>
+            </div>
+            {pubPreview !== '' && <p className="mt-2 text-sm text-slate-600">{pubPreview}</p>}
+            <p className="mt-2 text-xs text-slate-500">
+              Chi tiết cho phía VTVgo: docs/14-VTVGO.md (endpoint, header, hết hạn, thu hồi).
+            </p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">

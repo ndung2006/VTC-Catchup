@@ -29,25 +29,35 @@ export function verifyHlsQuery(channel: string, expRaw: string | null, token: st
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Pull token (?pull=, không hết hạn, cho đối tác kéo luồng) có hợp lệ không. */
+export function verifyPullQuery(channel: string, pull: string | null, secret = hlsSecret()): boolean {
+  if (secret === '' || pull === null) return false;
+  if (!channelOk(channel)) return false;
+  if (!/^[0-9a-f]{64}$/.test(pull)) return false;
+  const expect = createHmac('sha256', secret).update(`pull:${channel}`, 'utf8').digest('hex');
+  const a = Buffer.from(pull, 'utf8');
+  const b = Buffer.from(expect, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /**
- * Gắn token vào mọi URI trong playlist để hls.js/VLC tải được segment
- * (trình phát KHÔNG tự kế thừa query của URL playlist).
- * - Dòng trần (segment): `seg_001.ts` → `seg_001.ts?token=..&exp=..`
+ * Gắn query auth vào mọi URI trong playlist để hls.js/VLC/app đối tác tải được
+ * segment (trình phát KHÔNG tự kế thừa query của URL playlist).
+ * - Dòng trần (segment): `seg_001.ts` → `seg_001.ts?<query>`
  * - Thuộc tính URI="..." (EXT-X-MAP/KEY): gắn vào trong ngoặc kép.
  * Dòng bắt đầu bằng `#` (trừ URI="...") giữ nguyên.
  */
-export function rewritePlaylist(text: string, token: string, expMs: number): string {
-  const q = `token=${token}&exp=${expMs}`;
+export function rewritePlaylist(text: string, query: string): string {
   return text
     .split('\n')
     .map((line) => {
       const t = line.trim();
       if (t === '') return line;
       if (t.startsWith('#')) {
-        return line.includes('URI="') ? line.replace(/URI="([^"]+)"/g, (_, u: string) => `URI="${u}?${q}"`) : line;
+        return line.includes('URI="') ? line.replace(/URI="([^"]+)"/g, (_, u: string) => `URI="${u}?${query}"`) : line;
       }
       if (t.includes('?')) return line; // đã có query thì thôi
-      return `${line}?${q}`;
+      return `${line}?${query}`;
     })
     .join('\n');
 }

@@ -417,6 +417,60 @@ describe('API', { concurrency: false }, () => {
     assert.match(j.url, /^\/hls\/demo4\/index\.m3u8\?token=[0-9a-f]{64}&exp=\d+$/);
   });
 
+  it('pull-tokens + public/channels: Bearer đối tác đi được, lạ thì 401', async () => {
+    process.env['VTC_PARTNER_KEYS'] = 'vtvgo:KEYDOI-TAC-123';
+    try {
+      const anon = await fetch(`${base}/api/public/channels`);
+      assert.equal(anon.status, 401);
+      await anon.body?.cancel().catch(() => {});
+
+      // Bearer sai + không cookie → 401 (dùng fetch trần vì helper req tự gắn cookie login).
+      const bad = await fetch(`${base}/api/public/channels`, { headers: { authorization: 'Bearer sai' } });
+      assert.equal(bad.status, 401);
+      await bad.body?.cancel().catch(() => {});
+
+      const authed = (path: string, init?: RequestInit): Promise<Response> =>
+        req(path, { ...init, headers: { ...(init?.headers ?? {}), authorization: 'Bearer KEYDOI-TAC-123' } });
+
+      // Bearer đi qua gate tới cả API thường.
+      let r = await authed('/api/sources');
+      assert.equal(r.status, 200);
+
+      r = await authed('/api/pull-tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: 'khong-co' }),
+      });
+      assert.equal(r.status, 404);
+
+      r = await authed('/api/pull-tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: 'demo4' }),
+      });
+      assert.equal(r.status, 200);
+      const pt = (await r.json()) as { pull: string; url: string };
+      assert.match(pt.pull, /^[0-9a-f]{64}$/);
+      assert.match(pt.url, /^\/hls\/demo4\/index\.m3u8\?pull=[0-9a-f]{64}$/);
+      // Pull token verify được bằng cùng secret (không hạn).
+      const { verifyPullToken } = await import('./hlsToken.js');
+      assert.equal(verifyPullToken('demo4', pt.pull), true);
+
+      r = await authed('/api/public/channels');
+      assert.equal(r.status, 200);
+      const list = (await r.json()) as {
+        generatedAt: string;
+        channels: { name: string; hls: string; live: boolean }[];
+      };
+      assert.ok(typeof list.generatedAt === 'string');
+      const demo4 = list.channels.find((c) => c.name === 'demo4');
+      assert.ok(demo4 !== undefined && demo4.live === true);
+      assert.match(demo4.hls, /\/hls\/demo4\/index\.m3u8\?pull=[0-9a-f]{64}$/);
+    } finally {
+      delete process.env['VTC_PARTNER_KEYS'];
+    }
+  });
+
   it('SSE cần auth + trả event', async () => {
     const noAuth = await fetch(`${base}/api/system/stream`);
     assert.equal(noAuth.status, 401);

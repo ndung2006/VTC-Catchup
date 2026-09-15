@@ -1,7 +1,15 @@
 // hlsToken.test.ts — Ký/verify HMAC, không cần mạng.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { clampHlsTtl, signHlsToken, verifyHlsToken } from './hlsToken.js';
+import {
+  clampHlsTtl,
+  partnerKeys,
+  signHlsToken,
+  signPullToken,
+  verifyHlsToken,
+  verifyPartnerKey,
+  verifyPullToken,
+} from './hlsToken.js';
 
 const SECRET = 'test-hls-secret';
 
@@ -25,5 +33,35 @@ describe('hlsToken', () => {
     assert.equal(clampHlsTtl(undefined), 120);
     assert.equal(clampHlsTtl(NaN), 120);
     assert.equal(clampHlsTtl(30), 30);
+  });
+
+  it('pull token gắn theo kênh, không hết hạn, sai là rớt', () => {
+    const tok = signPullToken('vtv1', SECRET);
+    assert.equal(tok.length, 64);
+    assert.equal(verifyPullToken('vtv1', tok, SECRET), true);
+    assert.equal(verifyPullToken('vtv2', tok, SECRET), false);
+    assert.equal(verifyPullToken('vtv1', tok, 'secret-khac'), false);
+    assert.equal(verifyPullToken('vtv1', '0'.repeat(64), SECRET), false);
+    // Pull token khác hẳn token có hạn (miền ký khác nhau).
+    const exp = Date.now() + 60000;
+    assert.notEqual(tok, signHlsToken('vtv1', exp, SECRET));
+  });
+
+  it('partner keys: parse name:key, verify Bearer, sai là null', () => {
+    process.env['VTC_PARTNER_KEYS'] = 'vtvgo:KEYMOT, don-gian';
+    try {
+      assert.deepEqual(partnerKeys(), [
+        { name: 'vtvgo', key: 'KEYMOT' },
+        { name: 'partner', key: 'don-gian' },
+      ]);
+      assert.equal(verifyPartnerKey('Bearer KEYMOT'), 'vtvgo');
+      assert.equal(verifyPartnerKey('Bearer don-gian'), 'partner');
+      assert.equal(verifyPartnerKey('Bearer sai'), null);
+      assert.equal(verifyPartnerKey('Basic KEYMOT'), null);
+      assert.equal(verifyPartnerKey(undefined), null);
+    } finally {
+      delete process.env['VTC_PARTNER_KEYS'];
+    }
+    assert.deepEqual(partnerKeys(), []);
   });
 });

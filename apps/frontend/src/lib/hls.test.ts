@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { rewritePlaylist, verifyHlsQuery } from './hls.js';
+import { rewritePlaylist, verifyHlsQuery, verifyPullQuery } from './hls.js';
 
 const SECRET = 'test-hls-secret-fe';
 const tok = (channel: string, exp: number): string =>
@@ -22,8 +22,19 @@ describe('verifyHlsQuery', () => {
   });
 });
 
+describe('verifyPullQuery', () => {
+  it('pull đúng kênh thì qua; sai kênh/secret/rác thì rớt', () => {
+    const good = createHmac('sha256', SECRET).update('pull:vtv1', 'utf8').digest('hex');
+    assert.equal(verifyPullQuery('vtv1', good, SECRET), true);
+    assert.equal(verifyPullQuery('vtv2', good, SECRET), false);
+    assert.equal(verifyPullQuery('vtv1', good, 'khac'), false);
+    assert.equal(verifyPullQuery('vtv1', null, SECRET), false);
+    assert.equal(verifyPullQuery('vtv1', good, ''), false);
+  });
+});
+
 describe('rewritePlaylist', () => {
-  it('gắn token vào segment + URI map, giữ nguyên tag', () => {
+  it('gắn query vào segment + URI map, giữ nguyên tag', () => {
     const src = [
       '#EXTM3U',
       '#EXT-X-VERSION:3',
@@ -35,7 +46,7 @@ describe('rewritePlaylist', () => {
       'segment_002.ts',
       '#EXT-X-ENDLIST',
     ].join('\n');
-    const out = rewritePlaylist(src, 'TOK', 123);
+    const out = rewritePlaylist(src, 'token=TOK&exp=123');
     assert.ok(out.includes('#EXTM3U'));
     assert.ok(out.includes('#EXT-X-VERSION:3'));
     assert.ok(out.includes('#EXT-X-MAP:URI="init.mp4?token=TOK&exp=123"'));
@@ -44,8 +55,13 @@ describe('rewritePlaylist', () => {
     assert.ok(!out.includes('#EXTINF:5.0,?token='));
   });
 
+  it('gắn được query pull cho đối tác', () => {
+    const out = rewritePlaylist('seg.ts', 'pull=PULLHEX');
+    assert.equal(out, 'seg.ts?pull=PULLHEX');
+  });
+
   it('dòng đã có query thì giữ nguyên', () => {
-    const out = rewritePlaylist('seg.ts?x=1', 'TOK', 123);
+    const out = rewritePlaylist('seg.ts?x=1', 'token=TOK&exp=123');
     assert.equal(out, 'seg.ts?x=1');
   });
 });

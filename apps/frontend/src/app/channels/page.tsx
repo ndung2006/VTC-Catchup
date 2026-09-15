@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { Sidebar } from '@/components/Sidebar';
 import { Header } from '@/components/Header';
 import { api, type Source } from '@/lib/api';
+import { CopyButton } from '@/components/CopyButton';
 
 interface Row {
   sourceId: string;
@@ -25,6 +26,7 @@ export default function ChannelsPage(): React.JSX.Element {
   const [q, setQ] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState('');
+  const [pullInfo, setPullInfo] = useState<{ name: string; url: string } | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -77,6 +79,19 @@ export default function ChannelsPage(): React.JSX.Element {
 
   const liveCount = rows.filter((r) => r.isLive).length;
   const staleCount = rows.filter((r) => r.stale).length;
+
+  const makePullLink = async (r: Row): Promise<void> => {
+    setBusy(`pull:${r.sourceId}:${r.name}`);
+    setMsg('');
+    try {
+      const j = await api.pullToken(r.name);
+      setPullInfo({ name: r.name, url: `${window.location.origin}${j.url}` });
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Tạo link kéo luồng thất bại');
+    } finally {
+      setBusy('');
+    }
+  };
 
   const toggleLive = async (r: Row): Promise<void> => {
     const src = sources.find((s) => s.id === r.sourceId);
@@ -177,7 +192,15 @@ export default function ChannelsPage(): React.JSX.Element {
                         {r.isLive ? (r.ageSec === null ? 'mất playlist' : `${r.ageSec}s`) : '—'}
                         {r.stale ? ' (stale)' : ''}
                       </td>
-                      <td className="pr-3 text-right">
+                      <td className="space-x-2 pr-3 text-right">
+                        <button
+                          onClick={() => void makePullLink(r)}
+                          disabled={busy !== ''}
+                          title="Tạo link kéo luồng không hết hạn (giao cho đối tác/VTVgo)"
+                          className="rounded bg-slate-200 px-3 py-1 disabled:opacity-50"
+                        >
+                          Link kéo
+                        </button>
                         <Link
                           href={`/channel/${encodeURIComponent(r.name)}`}
                           className="rounded bg-slate-900 px-3 py-1 text-white"
@@ -193,6 +216,27 @@ export default function ChannelsPage(): React.JSX.Element {
           )}
         </main>
       </div>
+
+      {pullInfo !== null && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow">
+            <p className="text-sm font-semibold">Link kéo luồng kênh {pullInfo.name}</p>
+            <div className="mt-2 flex items-center gap-2 rounded bg-slate-100 p-3">
+              <code className="flex-1 break-all text-xs text-slate-600">{pullInfo.url}</code>
+              <CopyButton text={pullInfo.url} />
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Link không hết hạn — đối tác lưu 1 lần, kéo mãi. Thu hồi bằng cách đổi
+              VTC_HLS_SECRET (mọi link cũ vô hiệu ngay, kể cả link 4 giờ).
+            </p>
+            <div className="mt-4 flex justify-end">
+              <button onClick={() => setPullInfo(null)} className="rounded bg-slate-900 px-4 py-1.5 text-sm text-white">
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

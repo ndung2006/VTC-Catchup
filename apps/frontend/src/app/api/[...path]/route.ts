@@ -23,6 +23,9 @@ async function proxy(req: NextRequest, method: string): Promise<Response> {
   const headers = new Headers();
   const cookie = req.headers.get('cookie');
   if (cookie !== null) headers.set('cookie', cookie);
+  // Cho máy-gọi-máy (VTVgo) đi qua bằng Bearer partner key.
+  const authorization = req.headers.get('authorization');
+  if (authorization !== null) headers.set('authorization', authorization);
   const contentType = req.headers.get('content-type');
   if (contentType !== null) headers.set('content-type', contentType);
 
