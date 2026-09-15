@@ -9,7 +9,7 @@
 //  - Tùy chọn --event-code: signal event về app (như myexec.cpp mẫu) mỗi khi
 //    phát hiện lỗi, để backend Node/Go bắt và bắn Telegram.
 //
-// Cách build (trong container Ubuntu 22.04 đã cài tsduck-dev):
+// Cách build (trong container Ubuntu 24.04 đã cài tsduck + tsduck-dev 3.44):
 //   cd plugins/vtcmonitor && make
 //   make install   # copy .so vào $(tsconfig --plugin)
 //
@@ -38,7 +38,7 @@ namespace ts {
         virtual bool getOptions() override;
         virtual bool start() override;
         virtual bool stop() override;
-        virtual PacketProcessStatus processPacket(TSPacket&, TSPacketMetadata&) override;
+        virtual Status processPacket(TSPacket&, TSPacketMetadata&) override;
 
     private:
         //-- Tùy chọn dòng lệnh (bất biến sau getOptions()) --
@@ -115,8 +115,9 @@ bool ts::VtcMonitor::stop()
 //-----------------------------------------------------------------------------
 // Xử lý từng packet (đường nhanh — giữ code gọn, tránh log mỗi packet).
 // Trả về TSP_OK để giữ packet đi tiếp (monitor không sửa luồng).
+// Kiểu Status (TSDuck >= 3.40): bản cũ dùng PacketProcessStatus đã bỏ.
 //-----------------------------------------------------------------------------
-ts::PacketProcessStatus ts::VtcMonitor::processPacket(TSPacket& pkt, TSPacketMetadata&)
+ts::ProcessorPlugin::Status ts::VtcMonitor::processPacket(TSPacket& pkt, TSPacketMetadata&)
 {
     const PID pid = pkt.getPID();
 
