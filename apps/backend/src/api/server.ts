@@ -7,10 +7,10 @@
  //=============================================================================
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { generateConfText, writeConfFile, DEFAULT_CONF_DIR, ConfigError } from '../core/ConfigGenerator.js';
 import { ProcessManager } from '../core/ProcessManager.js';
-import { Store } from './store.js';
+import { Store, type SourceRecord } from './store.js';
 import { snapshot } from './system.js';
 import {
   JWT_COOKIE,
@@ -203,6 +203,20 @@ export function createApi(opts: ApiOptions = {}): {
     logger.warn('dùng JWT secret mặc định — đặt VTC_JWT_SECRET ở Prod!');
   }
 
+  // TSDuck KHÔNG tự tạo thư mục output (open file fail → process chết ngay).
+  // Tạo trước mỗi lần Start: captures/<id>/ (nếu recordAll) + live/<kenh>/ live.
+  // Ném lỗi để caller quyết định (Start tay → 500 rõ ràng; auto/watchdog → ERROR).
+  function ensureSourceDirs(rec: SourceRecord): void {
+    try {
+      if (rec.recordAll) mkdirSync(join(captureDir, rec.id), { recursive: true });
+      for (const c of rec.channels) {
+        if (c.isLive) mkdirSync(join(liveDir, c.name), { recursive: true });
+      }
+    } catch (e) {
+      throw new Error(`không tạo được thư mục output cho ${rec.id}: ${e instanceof Error ? e.message : 'lỗi không rõ'}`);
+    }
+  }
+
   // Đồng bộ trạng thái process → store (UI đọc 1 chỗ).
   // CC-error → Telegram (cooldown 5'/source trong notifier, PRD §15).
   // Crash không chủ đích → Telegram (Trigger 1) + auto-restart sau restartDelayMs
@@ -245,6 +259,7 @@ export function createApi(opts: ApiOptions = {}): {
         const r = store.getSource(id);
         if (r === undefined || r.status !== 'ERROR') return;
         try {
+          ensureSourceDirs(r);
           const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
           const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
           store.setStatus(id, 'RUNNING', pid);
@@ -652,6 +667,12 @@ export function createApi(opts: ApiOptions = {}): {
       if (id !== undefined && m === 'POST' && seg[3] === 'start') {
         const r = store.getSource(id);
         if (r === undefined) return send(res, 404, { error: `Source ${id} không tồn tại` });
+        try {
+          ensureSourceDirs(r);
+        } catch (e) {
+          if (e instanceof Error) return send(res, 500, { error: e.message });
+          throw e;
+        }
         const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
         const pid = pm.start(id, gen.filePath ?? `${confDir}/${id}.conf`);
         store.setStatus(id, 'RUNNING', pid);
@@ -692,6 +713,7 @@ export function createApi(opts: ApiOptions = {}): {
               const r = store.getSource(sid);
               if (r === undefined) continue;
               try {
+                ensureSourceDirs(r);
                 const gen = writeConfFile({ ...r, confRev: r.confRev }, confDir);
                 const pid = pm.start(sid, gen.filePath ?? `${confDir}/${sid}.conf`);
                 store.setStatus(sid, 'RUNNING', pid);
@@ -758,6 +780,7 @@ export function createApi(opts: ApiOptions = {}): {
               const cur = store.getSource(t.id);
               if (cur === undefined) continue;
               try {
+                ensureSourceDirs(cur);
                 const gen = writeConfFile({ ...cur, confRev: cur.confRev }, confDir);
                 const pid = pm.start(t.id, gen.filePath ?? `${confDir}/${t.id}.conf`);
                 store.setStatus(t.id, 'RUNNING', pid);

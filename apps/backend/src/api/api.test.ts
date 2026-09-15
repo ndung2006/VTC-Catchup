@@ -129,6 +129,10 @@ describe('API', { concurrency: false }, () => {
     assert.equal(r.status, 200);
     const started = (await r.json()) as { pid: number };
     assert.ok(started.pid > 0);
+    // Start phải tự tạo thư mục output (TSDuck không tự mkdir — thiếu là chết ngay).
+    const { existsSync: ex } = await import('node:fs');
+    assert.ok(ex(`${capsDir}/API1`), 'captures/<id> phải được tạo khi Start');
+    assert.ok(ex('storage/ramdisk/demo4'), 'live/<kenh> phải được tạo khi Start');
 
     r = await req('/api/sources/API1');
     const cur = (await r.json()) as { status: string };
