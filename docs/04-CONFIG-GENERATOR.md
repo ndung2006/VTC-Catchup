@@ -38,6 +38,10 @@ tsp -P zap 4 -O hls --duration 5 --live 5 --playlist /media/ramdisk/live/demo4/i
 dòng là tsp nhai từng ký tự (`unknown option -2 -3 -9...`). Chuỗi lệnh fork là
 1 dòng = 1 argv (tương đương shell `"..."` nhưng không quote).
 
+**Lưu chiểu = VoD (không `--live`).** `--live N` là live stream và TSDuck tự xóa
+segment cũ; `--live 0` bị cấm từ 3.44. Template không phải printf — TSDuck tự
+đánh số (`catchup-000000.ts`, exporter đọc theo mtime nên không care tên).
+
 Chặn sẵn case vô nghĩa (0 live + record_all=0 → chỉ còn `-O drop`) và SID 0
 (đặt trước cho NIT — `zap 0` thoát ngay).
 

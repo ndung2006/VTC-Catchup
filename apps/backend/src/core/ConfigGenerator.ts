@@ -116,8 +116,11 @@ export function generateConfText(source: SourceConfig): GeneratedConf {
     );
   }
   if (source.recordAll) {
-    // --live 0 = ghi liên tục, tự cắt segment 60s, process không bao giờ tự sát.
-    args.push('-O', 'hls', '--duration', '60', '--live', '0', `${CAPTURE_BASE}/${source.id}/catchup_%05d.ts`);
+    // Lưu chiểu: KHÔNG truyền --live (mặc định VoD = giữ toàn bộ segment).
+    // --live N là live stream và TSDuck TỰ XÓA segment cũ — ngược với lưu chiểu.
+    // --live 0 bị cấm từ 3.44 ("must be >= 1"). Template KHÔNG phải printf:
+    // TSDuck tự đánh số (catchup-000000.ts, ...); exporter đọc theo mtime.
+    args.push('-O', 'hls', '--duration', '60', `${CAPTURE_BASE}/${source.id}/catchup.ts`);
   } else {
     args.push('-O', 'drop');
   }

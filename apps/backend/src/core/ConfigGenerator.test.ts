@@ -24,7 +24,7 @@ describe('ConfigGenerator', () => {
     assert.ok(lines.includes('tsp -P zap 5 -O hls --duration 5 --live 5 --playlist /media/ramdisk/live/demo5/index.m3u8 /media/ramdisk/live/demo5/segment.ts'));
     assert.ok(!gen.content.includes('"'), 'không ngoặc kép trong file máy đọc');
     assert.ok(!gen.content.split('\n').some((l) => l.startsWith('#')), 'không comment trong file máy đọc');
-    assert.deepEqual(lines.slice(-7), ['-O', 'hls', '--duration', '60', '--live', '0', '/mnt/Data/catchup/captures/DEMO/catchup_%05d.ts']);
+    assert.deepEqual(lines.slice(-5), ['-O', 'hls', '--duration', '60', '/mnt/Data/catchup/captures/DEMO/catchup.ts']);
     // Nguyên tắc vàng: không bao giờ sinh --max-duration.
     assert.ok(!gen.content.includes('max-duration'));
   });

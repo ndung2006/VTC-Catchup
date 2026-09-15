@@ -77,7 +77,8 @@ fi
         fi
     done
     if [ "$RECORD_ALL" = "1" ]; then
-        printf -- '-O\nhls\n--duration\n60\n--live\n0\n/mnt/Data/catchup/captures/%s/catchup_%%05d.ts\n' "$SOURCE"
+        # VoD (không --live): giữ toàn bộ segment. --live N tự xóa cũ, --live 0 bị cấm từ 3.44.
+        printf -- '-O\nhls\n--duration\n60\n/mnt/Data/catchup/captures/%s/catchup.ts\n' "$SOURCE"
     else
         printf -- '-O\ndrop\n'
     fi
