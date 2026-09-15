@@ -121,7 +121,7 @@ describe('API', { concurrency: false }, () => {
     assert.equal(r.status, 200);
     const j = (await r.json()) as { conf: string; liveCount: number };
     assert.equal(j.liveCount, 2);
-    assert.match(j.conf, /-P fork "tsp -P zap 4/);
+    assert.match(j.conf, /tsp -P zap 4 -O hls/);
   });
 
   it('start rồi stop (fake tsp, kill nhóm thật)', async () => {

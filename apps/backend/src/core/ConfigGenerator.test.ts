@@ -2,7 +2,7 @@
 // Chạy: npm test  (tsx --test src/core/*.test.ts)
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ConfigError, generateConfText } from './ConfigGenerator.js';
+import { ConfigError, generateConfText, splitInputArgs } from './ConfigGenerator.js';
 
 describe('ConfigGenerator', () => {
   it('sinh MPTS 2 kênh live + record_all (đúng PRD §3.1)', () => {
@@ -16,15 +16,45 @@ describe('ConfigGenerator', () => {
       ],
     });
     assert.equal(gen.liveCount, 2);
-    assert.match(gen.content, /-I file \/tmp\/vtc-demo\/input\.ts --repeat/);
-    assert.match(gen.content, /-P vtcmonitor/);
-    assert.match(gen.content, /-P fork "tsp -P zap 4 -O hls/);
-    assert.match(gen.content, /-P fork "tsp -P zap 5 -O hls/);
-    assert.match(gen.content, /-O hls --duration 60 --live 0/);
-    // Nguyên tắc vàng: không có *dòng option* nào dùng max-duration
-    // (comment giải thích được phép nhắc tên flag).
-    const optionLines = gen.content.split('\n').filter((l) => l.startsWith('-'));
-    assert.ok(optionLines.every((l) => !l.includes('max-duration')));
+    // Định dạng @file TSDuck 3.44: mỗi dòng đúng 1 argv (đo trên máy thật 15/09/2026).
+    const lines = gen.content.split('\n').filter((l) => l !== '');
+    assert.deepEqual(lines.slice(0, 6), ['-I', 'file', '/tmp/vtc-demo/input.ts', '--repeat', '-P', 'vtcmonitor']);
+    assert.ok(lines.includes('fork'));
+    assert.ok(lines.includes('tsp -P zap 4 -O hls --duration 5 --live 5 --playlist /media/ramdisk/live/demo4/index.m3u8 /media/ramdisk/live/demo4/segment.ts'));
+    assert.ok(lines.includes('tsp -P zap 5 -O hls --duration 5 --live 5 --playlist /media/ramdisk/live/demo5/index.m3u8 /media/ramdisk/live/demo5/segment.ts'));
+    assert.ok(!gen.content.includes('"'), 'không ngoặc kép trong file máy đọc');
+    assert.ok(!gen.content.split('\n').some((l) => l.startsWith('#')), 'không comment trong file máy đọc');
+    assert.deepEqual(lines.slice(-7), ['-O', 'hls', '--duration', '60', '--live', '0', '/mnt/Data/catchup/captures/DEMO/catchup_%05d.ts']);
+    // Nguyên tắc vàng: không bao giờ sinh --max-duration.
+    assert.ok(!gen.content.includes('max-duration'));
+  });
+
+  it('splitInputArgs tách input, tôn trọng ngoặc kép', () => {
+    assert.deepEqual(splitInputArgs('ip 239.1.1.1:5000'), ['ip', '239.1.1.1:5000']);
+    assert.deepEqual(splitInputArgs('ip 239.1.1.1:5000 --local-address 192.168.1.2'), [
+      'ip',
+      '239.1.1.1:5000',
+      '--local-address',
+      '192.168.1.2',
+    ]);
+    assert.deepEqual(splitInputArgs('file "/tmp/my video/input.ts" --repeat'), [
+      'file',
+      '/tmp/my video/input.ts',
+      '--repeat',
+    ]);
+  });
+
+  it('chặn serviceId 0 (đặt trước cho NIT, zap thoát ngay)', () => {
+    assert.throws(
+      () =>
+        generateConfText({
+          id: 'X',
+          input: 'file /tmp/a.ts',
+          recordAll: true,
+          channels: [{ name: 'v1', serviceId: 0, isLive: true }],
+        }),
+      /1\.\.65535/,
+    );
   });
 
   it('recordAll=false sinh -O drop', () => {
@@ -34,7 +64,8 @@ describe('ConfigGenerator', () => {
       recordAll: false,
       channels: [{ name: 'DongNai1', serviceId: 2004, isLive: true }],
     });
-    assert.match(gen.content, /-O drop/);
+    const lines = gen.content.split('\n').filter((l) => l !== '');
+    assert.deepEqual(lines.slice(-2), ['-O', 'drop']);
   });
 
   it('chặn conf vô nghĩa (0 live + record false)', () => {

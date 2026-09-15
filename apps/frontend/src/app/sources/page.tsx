@@ -101,8 +101,8 @@ export default function SourcesPage(): React.JSX.Element {
         return null;
       }
       const sid = Number(c.serviceId);
-      if (!Number.isInteger(sid) || sid < 0 || sid > 65535) {
-        setMsg(`Kênh ${c.name}: Service ID phải là số nguyên 0..65535.`);
+      if (!Number.isInteger(sid) || sid < 1 || sid > 65535) {
+        setMsg(`Kênh ${c.name}: Service ID phải là số nguyên 1..65535 (0 đặt trước cho NIT).`);
         return null;
       }
       channels.push({ name: c.name.trim(), serviceId: sid, isLive: c.isLive });

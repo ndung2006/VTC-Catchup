@@ -18,17 +18,28 @@ sh scripts/gen-conf.sh --source TS8 \
 cat storage/conf/DEMO.conf
 ```
 
-Kết quả `DEMO.conf` (đã verify chạy):
+Kết quả `DEMO.conf` (đã verify chạy trên TSDuck 3.44 thật, 15/09/2026):
 
 ```
--I file /tmp/vtc-demo/input.ts --repeat
--P vtcmonitor
--P fork "tsp -P zap 4 -O hls .../demo4/..."
--P fork "tsp -P zap 5 -O hls .../demo5/..."
--O hls --duration 60 --live 0 /mnt/Data/catchup/captures/DEMO/catchup_%05d.ts
+-I
+file
+/tmp/vtc-demo/input.ts
+--repeat
+-P
+vtcmonitor
+-P
+fork
+tsp -P zap 4 -O hls --duration 5 --live 5 --playlist /media/ramdisk/live/demo4/index.m3u8 /media/ramdisk/live/demo4/segment.ts
+...
 ```
 
-Chặn sẵn case vô nghĩa (0 live + record_all=0 → chỉ còn `-O drop`).
+**Định dạng bắt buộc: mỗi dòng đúng 1 argv, không comment, không ngoặc kép.**
+`@file` của TSDuck không tách khoảng trắng kiểu shell — ghi `-I ip ...` chung
+dòng là tsp nhai từng ký tự (`unknown option -2 -3 -9...`). Chuỗi lệnh fork là
+1 dòng = 1 argv (tương đương shell `"..."` nhưng không quote).
+
+Chặn sẵn case vô nghĩa (0 live + record_all=0 → chỉ còn `-O drop`) và SID 0
+(đặt trước cho NIT — `zap 0` thoát ngay).
 
 ## Chạy full trong container
 
