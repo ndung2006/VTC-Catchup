@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { NextResponse, type NextRequest } from 'next/server';
-import { hlsSecret, rewritePlaylist, verifyHlsQuery, verifyPullQuery } from '@/lib/hls';
+import { hlsSecrets, rewritePlaylist, verifyHlsQuery, verifyPullQuery } from '@/lib/hls';
 
 const LIVE_DIR = process.env['VTC_LIVE_DIR'] || '/media/ramdisk/live';
 // CORS mở cho app đối tác (web player kéo cross-origin); auth vẫn bằng token.
@@ -37,10 +37,10 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
   // Cửa auth — 1 trong 2 (xem POST /api/hls-tokens và /api/pull-tokens ở backend):
   // - ?token=&exp= : link có hạn dùng (web player, VLC ad-hoc).
   // - ?pull=      : link kéo luồng không hạn cho đối tác (VTVgo).
-  const secret = hlsSecret();
+  const secrets = hlsSecrets();
   const url = new URL(req.url);
   let query: string;
-  if (secret === '') {
+  if (secrets.length === 0) {
     if (!warnedNoSecret) {
       warnedNoSecret = true;
       // eslint-disable-next-line no-console
@@ -50,12 +50,12 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
   } else {
     const pull = url.searchParams.get('pull');
     if (pull !== null) {
-      if (!verifyPullQuery(channel, pull, secret)) return denied('Link kéo luồng không hợp lệ');
+      if (!verifyPullQuery(channel, pull, secrets)) return denied('Link kéo luồng không hợp lệ');
       query = `pull=${pull}`;
     } else {
       const exp = url.searchParams.get('exp') ?? '';
       const token = url.searchParams.get('token') ?? '';
-      if (!verifyHlsQuery(channel, exp, token, secret)) {
+      if (!verifyHlsQuery(channel, exp, token, secrets)) {
         return denied('Link xem hết hạn hoặc không hợp lệ');
       }
       query = `token=${token}&exp=${exp}`;
@@ -79,7 +79,7 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
       // Gắn auth vào từng URI segment để trình phát tải được (nó không tự
       // kế thừa query của URL playlist).
       const raw = await readFile(filePath, 'utf8');
-      const body = secret === '' ? raw : rewritePlaylist(raw, query);
+      const body = secrets.length === 0 ? raw : rewritePlaylist(raw, query);
       headers.set('Content-Length', Buffer.byteLength(body).toString());
       headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       return new NextResponse(body, { headers });

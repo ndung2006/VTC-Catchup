@@ -89,7 +89,23 @@ curl -s -X POST https://catchup.vtcrd.top/api/hls-tokens \
 - Sức khỏe kênh: `status` trong danh mục; chi tiết playlist từng kênh do VTVgo
   tự giám sát (404/403 kéo dài = báo operator).
 
-## 5. Vận hành phía ta (checklist)
+## 5. Xoay secret KHÔNG downtime (quy trình chuẩn khi lộ key)
+
+Hệ verify chấp nhận đồng thời secret mới + cũ. Ký luôn bằng secret mới.
+
+1. Sinh secret mới. Đặt ở **cả 2 bên** (backend `.env.prod`, frontend Coolify):
+   `VTC_HLS_SECRET=<mới>`, `VTC_HLS_SECRET_PREVIOUS=<cũ>` → recreate backend
+   (`up -d`) + Deploy frontend.
+2. Báo VTVgo pull lại `/api/public/channels` và swap URL dần — link cũ (ký bằng
+   cũ) vẫn chạy vì verify còn chấp nhận, khán giả không rớt.
+3. Khi VTVgo xác nhận xong **và** đã quá TTL link ngắn nhất đang lưu hành
+   (mặc định 4 giờ): xóa `VTC_HLS_SECRET_PREVIOUS` (để trống) → recreate +
+   Deploy. Từ đây link cũ chết hẳn.
+
+Không bao giờ đổi thẳng secret (xóa cũ ngay) giờ cao điểm — mọi player ăn 403
+trong vài giây.
+
+## 6. Vận hành phía ta (checklist)
 
 1. `VTC_PARTNER_KEYS` đặt ở backend, restart backend. Key dài ngẫu nhiên
    (`openssl rand -hex 32`), mỗi đối tác 1 key có tên.

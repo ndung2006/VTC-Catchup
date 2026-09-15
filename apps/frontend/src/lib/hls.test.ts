@@ -31,6 +31,18 @@ describe('verifyPullQuery', () => {
     assert.equal(verifyPullQuery('vtv1', null, SECRET), false);
     assert.equal(verifyPullQuery('vtv1', good, ''), false);
   });
+
+  it('xoay secret: link cũ còn ăn khi previous còn, gỡ là chết', () => {
+    const OLD = 'SECRET-CU-FE';
+    const NEW = 'SECRET-MOI-FE';
+    const exp = Date.now() + 60000;
+    const oldTok = createHmac('sha256', OLD).update(`vtv1.${exp}`, 'utf8').digest('hex');
+    const oldPull = createHmac('sha256', OLD).update('pull:vtv1', 'utf8').digest('hex');
+    assert.equal(verifyHlsQuery('vtv1', String(exp), oldTok, [NEW, OLD]), true);
+    assert.equal(verifyPullQuery('vtv1', oldPull, [NEW, OLD]), true);
+    assert.equal(verifyHlsQuery('vtv1', String(exp), oldTok, [NEW]), false);
+    assert.equal(verifyPullQuery('vtv1', oldPull, [NEW]), false);
+  });
 });
 
 describe('rewritePlaylist', () => {

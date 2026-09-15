@@ -14,6 +14,20 @@ export function hlsSecret(): string {
   return process.env['VTC_HLS_SECRET'] ?? process.env['VTC_JWT_SECRET'] ?? 'dev-only-insecure-secret';
 }
 
+/**
+ * Danh sách secret verify (xoay không downtime): [primary, ...previous].
+ * Ký LUÔN bằng primary; verify chấp nhận bất kỳ secret nào trong danh sách.
+ * VTC_HLS_SECRET_PREVIOUS: secret cũ (1 hoặc nhiều, cách nhau phẩy), gỡ sau
+ * khi đối tác đã đổi hết sang link mới.
+ */
+export function hlsSecrets(): string[] {
+  const prev = (process.env['VTC_HLS_SECRET_PREVIOUS'] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  return [hlsSecret(), ...prev];
+}
+
 function channelOk(channel: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(channel);
 }
@@ -23,14 +37,21 @@ export function signHlsToken(channel: string, exp: number, secret: string = hlsS
 }
 
 /** expMs: epoch ms. Trả false khi hết hạn, sai kênh, sai định dạng, sai chữ ký. */
-export function verifyHlsToken(channel: string, expMs: number, token: string, secret: string = hlsSecret()): boolean {
+export function verifyHlsToken(
+  channel: string,
+  expMs: number,
+  token: string,
+  secrets: string | string[] = hlsSecrets(),
+): boolean {
   if (!channelOk(channel)) return false;
   if (!Number.isInteger(expMs) || expMs <= Date.now()) return false;
   if (!/^[0-9a-f]{64}$/.test(token)) return false;
-  const expect = signHlsToken(channel, expMs, secret);
+  const list = Array.isArray(secrets) ? secrets : [secrets];
   const a = Buffer.from(token, 'utf8');
-  const b = Buffer.from(expect, 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
+  return list.some((secret) => {
+    const b = Buffer.from(signHlsToken(channel, expMs, secret), 'utf8');
+    return a.length === b.length && timingSafeEqual(a, b);
+  });
 }
 
 /** TTL phút kẹp 5..1440 (mặc định 120). */
@@ -47,13 +68,15 @@ export function signPullToken(channel: string, secret: string = hlsSecret()): st
   return createHmac('sha256', secret).update(`pull:${channel}`, 'utf8').digest('hex');
 }
 
-export function verifyPullToken(channel: string, token: string, secret: string = hlsSecret()): boolean {
+export function verifyPullToken(channel: string, token: string, secrets: string | string[] = hlsSecrets()): boolean {
   if (!channelOk(channel)) return false;
   if (!/^[0-9a-f]{64}$/.test(token)) return false;
-  const expect = signPullToken(channel, secret);
+  const list = Array.isArray(secrets) ? secrets : [secrets];
   const a = Buffer.from(token, 'utf8');
-  const b = Buffer.from(expect, 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
+  return list.some((secret) => {
+    const b = Buffer.from(signPullToken(channel, secret), 'utf8');
+    return a.length === b.length && timingSafeEqual(a, b);
+  });
 }
 
 //-- Khóa API cho máy-gọi-máy (Bearer) ---------------------------------------

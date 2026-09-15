@@ -35,6 +35,23 @@ describe('hlsToken', () => {
     assert.equal(clampHlsTtl(30), 30);
   });
 
+  it('xoay secret: ký mới, verify ăn cả cũ; gỡ cũ là link cũ chết', () => {
+    const exp = Date.now() + 60000;
+    const oldTok = signHlsToken('vtv1', exp, 'SECRET-CU');
+    const newTok = signHlsToken('vtv1', exp, 'SECRET-MOI');
+    const oldPull = signPullToken('vtv1', 'SECRET-CU');
+    // Giai đoạn chuyển tiếp: verify chấp nhận cả 2.
+    assert.equal(verifyHlsToken('vtv1', exp, oldTok, ['SECRET-MOI', 'SECRET-CU']), true);
+    assert.equal(verifyHlsToken('vtv1', exp, newTok, ['SECRET-MOI', 'SECRET-CU']), true);
+    assert.equal(verifyPullToken('vtv1', oldPull, ['SECRET-MOI', 'SECRET-CU']), true);
+    // Gỡ cũ xong: link cũ rớt, link mới còn.
+    assert.equal(verifyHlsToken('vtv1', exp, oldTok, ['SECRET-MOI']), false);
+    assert.equal(verifyHlsToken('vtv1', exp, newTok, ['SECRET-MOI']), true);
+    assert.equal(verifyPullToken('vtv1', oldPull, ['SECRET-MOI']), false);
+    // Lạ hoàn toàn vẫn rớt.
+    assert.equal(verifyHlsToken('vtv1', exp, oldTok, ['SECRET-LA']), false);
+  });
+
   it('pull token gắn theo kênh, không hết hạn, sai là rớt', () => {
     const tok = signPullToken('vtv1', SECRET);
     assert.equal(tok.length, 64);

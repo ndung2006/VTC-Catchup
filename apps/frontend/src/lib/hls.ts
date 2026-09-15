@@ -8,6 +8,15 @@ export function hlsSecret(): string {
   return process.env['VTC_HLS_SECRET'] ?? '';
 }
 
+/** Danh sách secret verify (xoay không downtime): primary + previous. */
+export function hlsSecrets(): string[] {
+  const prev = (process.env['VTC_HLS_SECRET_PREVIOUS'] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  return [hlsSecret(), ...prev];
+}
+
 function channelOk(channel: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(channel);
 }
@@ -16,28 +25,43 @@ function expectedToken(channel: string, expMs: number, secret: string): string {
   return createHmac('sha256', secret).update(`${channel}.${expMs}`, 'utf8').digest('hex');
 }
 
-/** Token query (?token=&exp=) có hợp lệ cho kênh này không. */
-export function verifyHlsQuery(channel: string, expRaw: string | null, token: string | null, secret = hlsSecret()): boolean {
-  if (secret === '' || token === null || expRaw === null) return false;
+function anyMatch(token: string, candidates: string[]): boolean {
+  const a = Buffer.from(token, 'utf8');
+  return candidates.some((c) => {
+    const b = Buffer.from(c, 'utf8');
+    return a.length === b.length && timingSafeEqual(a, b);
+  });
+}
+
+/** Token query (?token=&exp=) có hợp lệ cho kênh này không (ăn mọi secret đang hiệu lực). */
+export function verifyHlsQuery(
+  channel: string,
+  expRaw: string | null,
+  token: string | null,
+  secrets: string | string[] = hlsSecrets(),
+): boolean {
+  const list = (Array.isArray(secrets) ? secrets : [secrets]).filter((s) => s !== '');
+  if (list.length === 0 || token === null || expRaw === null) return false;
   if (!channelOk(channel)) return false;
   const expMs = Number(expRaw);
   if (!Number.isInteger(expMs) || expMs <= Date.now()) return false;
   if (!/^[0-9a-f]{64}$/.test(token)) return false;
-  const expect = expectedToken(channel, expMs, secret);
-  const a = Buffer.from(token, 'utf8');
-  const b = Buffer.from(expect, 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
+  return anyMatch(
+    token,
+    list.map((s) => expectedToken(channel, expMs, s)),
+  );
 }
 
-/** Pull token (?pull=, không hết hạn, cho đối tác kéo luồng) có hợp lệ không. */
-export function verifyPullQuery(channel: string, pull: string | null, secret = hlsSecret()): boolean {
-  if (secret === '' || pull === null) return false;
+/** Pull token (?pull=, không hết hạn, cho đối tác kéo luồng) có hợp lệ không (ăn mọi secret đang hiệu lực). */
+export function verifyPullQuery(channel: string, pull: string | null, secrets: string | string[] = hlsSecrets()): boolean {
+  const list = (Array.isArray(secrets) ? secrets : [secrets]).filter((s) => s !== '');
+  if (list.length === 0 || pull === null) return false;
   if (!channelOk(channel)) return false;
   if (!/^[0-9a-f]{64}$/.test(pull)) return false;
-  const expect = createHmac('sha256', secret).update(`pull:${channel}`, 'utf8').digest('hex');
-  const a = Buffer.from(pull, 'utf8');
-  const b = Buffer.from(expect, 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
+  return anyMatch(
+    pull,
+    list.map((s) => createHmac('sha256', s).update(`pull:${channel}`, 'utf8').digest('hex')),
+  );
 }
 
 /**
