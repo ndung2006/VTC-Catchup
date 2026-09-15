@@ -85,6 +85,14 @@ export function generateConfText(source: SourceConfig): GeneratedConf {
   if (source.input.trim() === '') {
     throw new ConfigError('source.input rỗng');
   }
+  // Bẫy thường gặp: copy link VLC (udp://@239.1.1.1:5000) vào ô input.
+  // TSDuck cần TÊN PLUGIN + tham số ("ip 239.1.1.1:5000"), không ăn URL.
+  if (source.input.includes('://')) {
+    throw new ConfigError(
+      `source.input "${source.input}" trông như URL (kiểu copy từ VLC). ` +
+        `TSDuck cần tên plugin + tham số, VD "ip 239.1.1.1:5000" (bỏ "udp://" và "@").`,
+    );
+  }
   source.channels.forEach(assertChannel);
 
   const live = source.channels.filter((c) => c.isLive);

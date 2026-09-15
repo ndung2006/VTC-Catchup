@@ -323,7 +323,7 @@ export default function SourcesPage(): React.JSX.Element {
                 </label>
               </div>
               <label className="block text-sm">
-                Input TSDuck (phần sau -I)
+                Input TSDuck (phần sau -I — VD &quot;ip 239.1.1.1:5000&quot;, không dán link udp:// của VLC)
                 <input
                   value={fInput}
                   onChange={(e) => setFInput(e.target.value)}

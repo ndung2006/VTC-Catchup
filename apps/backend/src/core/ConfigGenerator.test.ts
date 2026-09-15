@@ -44,6 +44,19 @@ describe('ConfigGenerator', () => {
     ]);
   });
 
+  it('chặn input kiểu URL VLC (udp://...)', () => {
+    assert.throws(
+      () =>
+        generateConfText({
+          id: 'X',
+          input: 'udp://239.1.1.1:5000',
+          recordAll: true,
+          channels: [{ name: 'v1', serviceId: 1, isLive: true }],
+        }),
+      /trông như URL/,
+    );
+  });
+
   it('chặn serviceId 0 (đặt trước cho NIT, zap thoát ngay)', () => {
     assert.throws(
       () =>
